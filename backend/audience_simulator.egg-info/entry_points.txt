@@ -1,0 +1,2 @@
+[console_scripts]
+audience = audience_simulator.cli:main
