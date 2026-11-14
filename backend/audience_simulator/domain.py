@@ -4,6 +4,8 @@ The registry is deliberately empty: a domain is added only after a frozen held-o
 benchmark (see docs/PROMISE.md) has passed for that exact prompt version and model.
 """
 
+import json
+from pathlib import Path
 from typing import Literal
 
 from pydantic import model_validator
@@ -57,6 +59,9 @@ class DomainAssessment(StrictModel):
     def verified(self) -> bool:
         return self.status == "verified"
 
+    def summary(self) -> dict:
+        return {**self.model_dump(), "verified": self.verified}
+
 
 VERIFIED_DOMAINS: tuple[DomainEntry, ...] = ()
 
@@ -90,3 +95,28 @@ def assess_domain(
         status="unverified_configuration",
         reason="Dominio noto, ma prompt o modello non coincidono con quelli verificati: ripetere il benchmark.",
     )
+
+
+BENCHMARK_DIR = Path(__file__).resolve().parents[2] / "docs" / "benchmarks"
+
+
+def registry_problems(registry=None, manifest_dir=None):
+    """Registry entries must be backed by a committed benchmark manifest with the same prompt and model."""
+    entries = VERIFIED_DOMAINS if registry is None else registry
+    directory = Path(manifest_dir) if manifest_dir is not None else BENCHMARK_DIR
+    problems = []
+    for entry in entries:
+        for config in entry.verified_for:
+            path = directory / f"{config.benchmark_id}.json"
+            if not path.is_file():
+                problems.append(f"manifest mancante per il benchmark {config.benchmark_id}")
+                continue
+            manifest = json.loads(path.read_text())
+            if (manifest.get("prompt_version"), manifest.get("model")) != (
+                config.prompt_version,
+                config.model,
+            ):
+                problems.append(
+                    f"il manifest {config.benchmark_id} non coincide con prompt e modello del registro"
+                )
+    return problems

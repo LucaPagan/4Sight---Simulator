@@ -70,6 +70,8 @@ resource_table(
     constraints=(UniqueConstraint("scenario_id", "idempotency_key"),),
 )
 resource_table("agent_evaluations", Column("model_digest", String, index=True))
+resource_table("persona_cards", Column("model_digest", String, index=True))
+resource_table("agent_decisions", Column("model_digest", String, index=True))
 for name in [
     "consumer_states",
     "exposure_events",
@@ -182,7 +184,12 @@ class Repository:
             if runtime_selection and (
                 existing.get("provider", "ollama"),
                 existing.get("requested_model"),
-            ) != (runtime_selection["provider"], runtime_selection["model"]):
+                existing.get("mode", "history_forecast"),
+            ) != (
+                runtime_selection["provider"],
+                runtime_selection["model"],
+                runtime_selection.get("mode", "history_forecast"),
+            ):
                 raise ValueError("Chiave idempotente già usata con un modello diverso")
             return existing
         try:
@@ -200,6 +207,8 @@ class Repository:
                     "phase": "queued",
                     "provider": (runtime_selection or {}).get("provider", "ollama"),
                     "requested_model": (runtime_selection or {}).get("model"),
+                    "mode": (runtime_selection or {}).get("mode", "history_forecast"),
+                    "slots": (runtime_selection or {}).get("slots"),
                 },
             )
         except IntegrityError:
@@ -263,6 +272,38 @@ class Repository:
         else:
             try:
                 self.create("agent_evaluations", value, key)
+            except IntegrityError:
+                pass
+
+    def get_card(self, key):
+        try:
+            return self.get("persona_cards", key)
+        except KeyError:
+            return None
+
+    def save_card(self, key, payload):
+        value = {**payload, "model_digest": payload.get("digest")}
+        if self.get_card(key):
+            self.replace("persona_cards", key, value)
+        else:
+            try:
+                self.create("persona_cards", value, key)
+            except IntegrityError:
+                pass
+
+    def get_decision(self, key):
+        try:
+            return self.get("agent_decisions", key)
+        except KeyError:
+            return None
+
+    def save_decision(self, key, payload):
+        value = {**payload, "model_digest": payload.get("digest")}
+        if self.get_decision(key):
+            self.replace("agent_decisions", key, value)
+        else:
+            try:
+                self.create("agent_decisions", value, key)
             except IntegrityError:
                 pass
 

@@ -1,18 +1,20 @@
 "use client";
 
 import Link from "next/link";
+import {useRouter} from "next/navigation";
 import {useEffect, useMemo, useState} from "react";
-import {ArrowDownToLine, LoaderCircle, RefreshCw} from "lucide-react";
+import {ArrowDownToLine, LoaderCircle, RefreshCw, RotateCcw} from "lucide-react";
 import {Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis} from "recharts";
 import {api} from "@/lib/api";
-import {AgentDialog} from "@/components/agent-dialog";
+import {Hero} from "@/components/hero";
 import {useApp} from "@/components/app-provider";
 import {Mark, markColor, markLetter} from "@/components/mark";
-import {ReportAside} from "@/components/report-aside";
-import {COMPLETION_LABEL, SIMULATION_NOTE, STATUS_LABEL, TRUST, runLabel, runState} from "@/lib/copy";
+import {DivergencePanel, NativeBanner, QualityPanel, ReachPanel, SegmentsPanel} from "@/components/native-panels";
+import {PersonaGallery} from "@/components/persona-gallery";
+import {NATIVE_BADGE, OUTCOME_LABEL, OUT_OF_DOMAIN, PHASE_LABEL, SIMULATION_NOTE, STATUS_LABEL, TRUST, runLabel, runState} from "@/lib/copy";
 import {BANDS, dateTime, euros, fmt, percent} from "@/lib/format";
 import {isRunResumable, validCreative} from "@/lib/selection";
-import type {Age, Prediction, Result, Run} from "@/lib/types";
+import type {Age, Brief, Prediction, Quality, Result, Run, TargetingReport} from "@/lib/types";
 
 type Summary = {id: string; index: number; ctr: number; cpm: number; clicks: number; spend: number; impressions: number};
 
@@ -34,6 +36,14 @@ export function verdict(summaries: Summary[], result: Result): {title: string; d
   const diff = top.ctr - second.ctr;
   const pair = result.comparison?.pairwise.find(p => [p.a, p.b].includes(top.id) && [p.a, p.b].includes(second.id));
   const partial = result.completion_status !== "complete";
+  if (pair?.decision === "out_of_domain") {
+    const leader = pair.model_leader ? summaries.find(s => s.id === pair.model_leader) : null;
+    return {
+      title: "Nessun vincitore verificato",
+      detail: `${leader ? `Il modello indica la creatività ${markLetter(leader.index)} in vantaggio di ${fmt(Math.abs(pair.difference_pp), 2)} punti di CTR. ` : ""}${OUT_OF_DOMAIN}`,
+      winner: null
+    };
+  }
   if (pair?.status === "practical_tie" || Math.abs(diff) < 0.005) {
     return {title: "Le creatività si equivalgono", detail: "La differenza è troppo piccola per scegliere: usa altri criteri, come il costo o il messaggio.", winner: null};
   }
@@ -51,12 +61,21 @@ export function verdict(summaries: Summary[], result: Result): {title: string; d
 }
 
 export function ResultsView({runId}: {runId: string}) {
-  const {runNames, setError, refresh, rememberRunWinner} = useApp();
+  const router = useRouter();
+  const {runNames, setError, setBrief, refresh, rememberRunWinner} = useApp();
   const [run, setRun] = useState<Run | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [active, setActive] = useState("");
   const [busy, setBusy] = useState("");
-  const [agentId, setAgentId] = useState<string | null>(null);
+  const [targetingReport, setTargetingReport] = useState<TargetingReport | null>(null);
+
+  const scenarioId = run?.scenario_id;
+  useEffect(() => {
+    if (!scenarioId) return;
+    let stopped = false;
+    api<{targeting_report?: TargetingReport}>(`/scenarios/${scenarioId}`).then(s => {if (!stopped) setTargetingReport(s.targeting_report ?? null);}).catch(() => {});
+    return () => {stopped = true;};
+  }, [scenarioId]);
 
   useEffect(() => {
     let stopped = false;
@@ -107,35 +126,63 @@ export function ResultsView({runId}: {runId: string}) {
       window.open(value.download_url, "_blank", "noopener");
     } catch (e) {setError((e as Error).message);} finally {setBusy("");}
   }
+  // La rubrica per i valutatori e la chiave che ne ricollega le righe vanno consegnate separatamente.
+  async function downloadRubric() {
+    if (!run) return;
+    setBusy("rubric");
+    try {
+      const sheet = await api<{csv: string; key: Record<string, string>}>(`/simulations/${run.id}/rubric?n=60`);
+      const save = (name: string, text: string, type: string) => {
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(new Blob([text], {type}));
+        link.download = name;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      };
+      save(`rubrica-${run.id.slice(0, 8)}.csv`, sheet.csv, "text/csv");
+      save(`chiave-rubrica-${run.id.slice(0, 8)}.json`, JSON.stringify(sheet.key, null, 2), "application/json");
+    } catch (e) {setError((e as Error).message);} finally {setBusy("");}
+  }
+  // Riporta i dati nel modulo per ripetere la simulazione cambiando solo ciò che serve.
+  async function repeat() {
+    if (!run) return;
+    setBusy("repeat");
+    try {
+      const scenario = await api<{brief: Brief}>(`/scenarios/${run.scenario_id}`);
+      if (!scenario.brief) throw new Error("I dati di partenza non sono disponibili per questa simulazione.");
+      setError(""); setBrief(scenario.brief); router.push("/");
+    } catch (e) {setError((e as Error).message); setBusy("");}
+  }
 
   if (!run) return <div className="empty"><LoaderCircle className="spin" size={28} aria-hidden="true" /><h1>Carico la simulazione…</h1></div>;
 
   const state = runState(run);
   const inProgress = ["queued", "running"].includes(run.status);
+  const native = result?.mode === "agent_native" || run.mode === "agent_native";
+  const nativeReport = result?.report?.native;
+  const quality: Quality | undefined = result?.report?.reaction_quality ?? result?.behavior?.reaction_quality;
+  const order = summaries.map(x => x.id);
   const complete = run.completion_status === "complete";
   const v = result && summaries.length ? verdict(summaries, result) : null;
-  const agentEvents = agentId ? result?.behavior?.events.filter(e => e.agent_id === agentId) || [] : [];
-  const agent = agentId ? result?.profiles.find(p => p.agent_id === agentId) || null : null;
-  const reactions = result?.behavior?.events.filter(e => e.ad_id === selected).slice(0, 6) || [];
+  const reactions = result?.behavior?.events.filter(e => e.ad_id === selected).slice(0, 4) || [];
   const title = runLabel(run, runNames);
+  const heading = v ? v.title : inProgress ? "Simulazione in corso" : state.label;
 
   return (
-    <div className="results-layout">
     <div className="results">
-      <header className="results-head">
-        <div>
-          <h1 className="verdict">{v?.winner !== null && v?.winner !== undefined && <Mark index={v.winner} size={34} />}{v ? v.title : inProgress ? "Simulazione in corso" : state.label}</h1>
-          {v && <p className="lead">{v.detail}</p>}
-          {v?.trust && <p className="trust">{v.trust}</p>}
-        </div>
-        <div className="head-side"><span className={`badge ${state.tone}`}>{state.label}</span><span className="muted">{runNames[run.id] ? `${title} · ` : ""}{dateTime(run.created_at)}</span></div>
-      </header>
+      <Hero
+        title={<>{v?.winner !== null && v?.winner !== undefined && <Mark index={v.winner} size={40} onDark />}{heading}</>}
+        lead={v?.detail}
+      >
+        {v?.trust && <p className="trust">{v.trust}</p>}
+        <p className="hero-meta"><span className={`badge ${state.tone}`}>{state.label}</span>{native && <span className="badge wait">{NATIVE_BADGE}</span>} {runNames[run.id] ? `${title} · ` : ""}{dateTime(run.created_at)}</p>
+      </Hero>
 
       {(!complete || inProgress) && (
         <section className="progress" aria-label="Avanzamento">
-          <div className="progress-line"><span>{STATUS_LABEL[run.status] || run.status}</span><b className="num">{fmt(run.progress)}%</b></div>
+          <div className="progress-line"><span>{inProgress && PHASE_LABEL[run.phase] ? PHASE_LABEL[run.phase] : STATUS_LABEL[run.status] || run.status}</span><b className="num">{fmt(run.progress)}%</b></div>
           <div className="bar" role="progressbar" aria-valuenow={run.progress} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${run.progress}%`}} /></div>
-          <p className="muted">{fmt(run.completed_policies)} di {run.required_policies ? fmt(run.required_policies) : "…"} valutazioni completate. La pagina si aggiorna da sola.</p>
+          <p className="muted">{fmt(run.completed_policies)} di {run.required_policies ? fmt(run.required_policies) : "…"} {native ? "reazioni" : "valutazioni"}. La pagina si aggiorna da sola.</p>
           {run.error && <p className="warn">{run.error}</p>}
           <div className="row">
             {isRunResumable(run) && <button className="button secondary" onClick={() => post(`/simulations/${run.id}/resume`)} disabled={!!busy}><RefreshCw size={18} aria-hidden="true" /> Riprendi dove si era fermata</button>}
@@ -144,35 +191,35 @@ export function ResultsView({runId}: {runId: string}) {
         </section>
       )}
 
-      {result && summaries.length > 0 && <>
-        <section>
-          <h2 className="section-title">Le creatività a confronto</h2>
+      {native && <NativeBanner />}
+      {result && summaries.length > 0 && <div className="results-grid">
+        <section className="results-main">
           <div className="table-scroll">
             <table className="compare">
-              <thead><tr><th>Creatività</th><th className="r">CTR atteso</th><th className="r">Costo per 1.000 visualizzazioni</th><th className="r hide-s">Clic attesi</th><th className="r">Spesa attesa</th></tr></thead>
+              <thead><tr><th>Creatività</th><th className="r">CTR atteso</th>{native && <th className="r hide-s">Dati storici</th>}<th className="r">Costo ogni 1.000 viste</th><th className="r hide-s">Clic attesi</th></tr></thead>
               <tbody>
                 {summaries.map(s => (
                   <tr key={s.id} className={v?.winner === s.index ? "winner" : ""}>
                     <th scope="row"><span className="mark-label"><Mark index={s.index} />Creatività {markLetter(s.index)}</span>{v?.winner === s.index ? <em>consigliata</em> : null}</th>
                     <td className="r num">{percent(s.ctr)}</td>
+                    {native && <td className="r num hide-s">{nativeReport ? percent(nativeReport.divergence.find(d => d.ad_id === s.id)?.reference_ctr ?? 0) : "–"}</td>}
                     <td className="r num">{euros(s.cpm)}</td>
                     <td className="r num hide-s">{fmt(s.clicks, 1)}</td>
-                    <td className="r num">{euros(s.spend)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="note">{SIMULATION_NOTE} Il CTR è calibrato sui dati storici del kit. Il numero di agenti non cambia questi valori.</p>
           <div className="row">
             <button className="button secondary" onClick={() => exportRun("aggregate")} disabled={!!busy}><ArrowDownToLine size={18} aria-hidden="true" /> {complete ? "Scarica i numeri (CSV)" : "Scarica la stima preliminare"}</button>
-            {complete && <button className="button ghost" onClick={() => exportRun("report")} disabled={!!busy}>Scarica il report completo</button>}
+            {complete && <button className="button ghost" onClick={() => exportRun("report")} disabled={!!busy}>Scarica il report</button>}
+            <button className="button ghost" onClick={repeat} disabled={!!busy}><RotateCcw size={18} aria-hidden="true" /> Ripeti con altri dati</button>
           </div>
         </section>
 
-        <section>
-          <div className="title-row sec">
-            <h2>Come cambia per età</h2>
+        <section className="results-side">
+          <div className="title-row">
+            <h2>Come hanno reagito</h2>
             {summaries.length > 1 && (
               <div className="tabs" role="tablist" aria-label="Creatività">
                 {summaries.map(s => (
@@ -181,89 +228,54 @@ export function ResultsView({runId}: {runId: string}) {
               </div>
             )}
           </div>
-          <p className="muted">Ipotesi del simulatore: nei dati non ci sono età osservate, quindi leggi le differenze come indicazioni.</p>
-          <div className="chart" role="img" aria-label={`CTR atteso per fascia d'età, creatività ${markLetter(current?.index ?? 0)}`}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={ageRows} margin={{top: 12, right: 8, left: 0, bottom: 0}}>
-                <CartesianGrid vertical={false} stroke="var(--line)" />
-                <XAxis dataKey="age_band" axisLine={false} tickLine={false} tick={{fill: "var(--ink-2)", fontSize: 14}} />
-                <YAxis axisLine={false} tickLine={false} width={52} tickFormatter={x => `${fmt(x, 1)}%`} tick={{fill: "var(--ink-2)", fontSize: 14}} />
-                <Tooltip cursor={{fill: "var(--ground)"}} formatter={value => [`${fmt(Number(value), 2)}%`, "CTR atteso"]} contentStyle={{borderRadius: 4, border: "1px solid var(--line)", fontSize: 14}} />
-                <Bar dataKey="ctr_estimate" isAnimationActive={false} fill={markColor(current?.index ?? 0)} radius={[2, 2, 0, 0]} maxBarSize={64} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <details className="more">
-            <summary>Mostra i numeri per fascia</summary>
-            <div className="table-scroll">
-              <table>
-                <caption className="sr-only">CTR atteso per fascia d&apos;età</caption>
-                <thead><tr><th>Fascia</th><th className="r">CTR atteso</th><th className="r">Intervallo</th><th className="r">Visualizzazioni</th><th className="r">Clic</th></tr></thead>
-                <tbody>
-                  {ageRows.map(a => (
-                    <tr key={a.age_band}><th scope="row">{a.age_band}</th><td className="r num">{percent(a.ctr_estimate)}</td><td className="r num">{fmt(a.ctr_range[0], 2)}–{fmt(a.ctr_range[1], 2)}%</td><td className="r num">{fmt(a.expected_impressions)}</td><td className="r num">{fmt(a.clicks_estimate, 1)}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
-        </section>
-
-        <section>
-          <h2 className="section-title">Come hanno reagito i consumatori</h2>
           {result.behavior ? (
             reactions.length ? (
               <ul className="reactions">
                 {reactions.map((e, i) => (
                   <li key={i}>
-                    <div className="reaction-top">
-                      <b>{e.clicked ? "Ha cliccato" : e.noticed ? "Ha notato l'annuncio" : "Ha ignorato l'annuncio"}</b>
-                      <button className="link" onClick={() => setAgentId(e.agent_id)}>Chi è</button>
-                    </div>
-                    <p>{e.explanation || "Nessuna spiegazione: l'annuncio è stato scorso senza attenzione."}</p>
+                    <b>{e.outcome ? OUTCOME_LABEL[e.outcome] : e.clicked ? "Ha cliccato" : e.noticed ? "Ha notato l'annuncio" : "Ha ignorato l'annuncio"}</b>
+                    <p>{e.explanation || "L'annuncio è stato scorso senza attenzione."}</p>
                   </li>
                 ))}
               </ul>
-            ) : <p className="muted">Nessuna reazione registrata per questa creatività.</p>
-          ) : <p className="muted">Le reazioni dei consumatori compaiono quando tutte le valutazioni sono completate.</p>}
+            ) : <p className="muted">Nessuna reazione registrata per questo annuncio.</p>
+          ) : <p className="muted">Le reazioni arrivano quando la simulazione è completa.</p>}
+
+          <details className="more">
+            <summary>Come cambia per età</summary>
+            <p className="muted">Sono ipotesi del simulatore: nei dati non ci sono età osservate.</p>
+            <div className="chart" role="img" aria-label={`CTR atteso per fascia d'età, creatività ${markLetter(current?.index ?? 0)}`}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={ageRows} margin={{top: 12, right: 8, left: 0, bottom: 0}}>
+                  <CartesianGrid vertical={false} stroke="var(--line)" />
+                  <XAxis dataKey="age_band" axisLine={false} tickLine={false} tick={{fill: "var(--ink-2)", fontSize: 14}} />
+                  <YAxis axisLine={false} tickLine={false} width={52} tickFormatter={x => `${fmt(x, 1)}%`} tick={{fill: "var(--ink-2)", fontSize: 14}} />
+                  <Tooltip cursor={{fill: "var(--ground)"}} formatter={value => [`${fmt(Number(value), 2)}%`, "CTR atteso"]} contentStyle={{borderRadius: 4, border: "1px solid var(--line)", fontSize: 14}} />
+                  <Bar dataKey="ctr_estimate" isAnimationActive={false} fill={markColor(current?.index ?? 0)} radius={[2, 2, 0, 0]} maxBarSize={64} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </details>
         </section>
 
-        {(result.comparison || result.report || result.behavior) && (
+        {targetingReport?.reach && <div className="results-wide"><ReachPanel report={targetingReport} /></div>}
+        {nativeReport && <div className="results-wide"><DivergencePanel divergence={nativeReport.divergence} order={order} /></div>}
+        {nativeReport && <div className="results-wide"><SegmentsPanel native={nativeReport} creativeId={selected} /></div>}
+        {native && result.cards && <div className="results-wide"><PersonaGallery result={result} creativeId={selected} /></div>}
+        {native && quality && <div className="results-wide"><QualityPanel quality={quality} result={result} onRubric={downloadRubric} busy={!!busy} /></div>}
+
+        {result.report && (
           <details className="more">
-            <summary>Dettagli e limiti</summary>
-            {result.comparison && (
-              <div>
-                <h3>Confronto a coppie</h3>
-                <ul className="plain">
-                  {result.comparison.pairwise.map((p, i) => (
-                    <li key={i}><b>{p.a.replace("creative-", "")} contro {p.b.replace("creative-", "")}</b>: {p.winner ? `in vantaggio ${p.winner.replace("creative-", "")}` : p.status === "practical_tie" ? "pareggio" : "nessun vincitore netto"}, differenza di {fmt(p.difference_pp, 2)} punti.</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {result.behavior?.raw_panel.length ? (
-              <div>
-                <h3>Cosa dicono solo i consumatori simulati</h3>
-                <ul className="plain">{result.behavior.raw_panel.map(r => <li key={r.ad_id}><b>{r.ad_id.replace("creative-", "")}</b>: CTR del panel {percent(r.raw_panel_ctr)}, non calibrato sui dati storici.</li>)}</ul>
-              </div>
-            ) : null}
-            {result.report && (
-              <div>
-                <h3>Cosa provare dopo</h3>
-                {result.report.diagnoses.map(d => <p key={d.creative_id}><b>{d.creative_id.replace("creative-", "")}</b>: {d.hypothesis} <span className="muted">{d.experiment.design}</span></p>)}
-                <h3>Limiti</h3>
-                <ul className="plain">{result.report.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul>
-              </div>
-            )}
-            <p className="muted">Stato della simulazione: {COMPLETION_LABEL[run.completion_status] || run.completion_status}. <Link href="/settings">Come si calcola</Link></p>
+            <summary>Cosa provare dopo e limiti</summary>
+            {result.report.diagnoses.map(d => <p key={d.creative_id} className="top-space"><b>{d.creative_id.replace("creative-", "")}</b>: {d.hypothesis} <span className="muted">{d.experiment.design}</span></p>)}
+            <ul className="plain top-space">{result.report.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul>
+            <p className="muted top-space"><Link href="/settings">Come si calcola</Link></p>
           </details>
         )}
-      </>}
+      </div>}
+      {result && summaries.length > 0 && <p className="note">{SIMULATION_NOTE}</p>}
 
       {!result && !inProgress && !run.result_key && <p className="muted">Non ci sono ancora risultati per questa simulazione.</p>}
-      <AgentDialog agent={agent} events={agentEvents} onClose={() => setAgentId(null)} />
-    </div>
-    <ReportAside run={run} />
     </div>
   );
 }

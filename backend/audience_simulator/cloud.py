@@ -9,13 +9,14 @@ from uuid import uuid4
 
 import httpx
 
-from .agents import SYSTEM_PROMPT, evaluation_schema, validate_evaluation
+from .agents import evaluation_schema, validate_evaluation
+from .prompts import PROMPT_VERSION, SYSTEM_PROMPT, model_view
 
 GEMINI_MODELS = {
     "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite · velocità",
     "gemini-3.8-flash": "Gemini 3.8 Flash · qualità da confrontare",
 }
-CLOUD_PROMPT_VERSION = "consumer-policy-v6-gemini-interactions-2026-05-20"
+CLOUD_PROMPT_VERSION = f"{PROMPT_VERSION}-gemini-interactions-2026-05-20"
 
 
 def credentials_path(root, provider="gemini"):
@@ -143,31 +144,7 @@ class GeminiClient:
             "warning": "Il tier di fatturazione non è verificabile dalla chiave. Usa un progetto Google senza billing. Quote e policy dati del provider si applicano.",
         }
 
-    def evaluate(self, payload):
-        if not self.status()["ready"]:
-            raise CloudRuntimeError(self.status()["error"])
-        pacing = self.limiter.pace()
-        start = time.monotonic()
-        response = self.http.post(
-            "/v1beta/interactions",
-            json={
-                "model": self.model,
-                "system_instruction": SYSTEM_PROMPT,
-                "input": json.dumps(payload, ensure_ascii=False),
-                "store": False,
-                "stream": False,
-                "response_format": {
-                    "type": "text",
-                    "mime_type": "application/json",
-                    "schema": evaluation_schema(payload),
-                },
-                "generation_config": {
-                    "temperature": 0,
-                    "max_output_tokens": 1024,
-                    "thinking_level": "minimal" if self.model.endswith("flash-lite") else "low",
-                },
-            },
-        )
+    def _check(self, response):
         if response.status_code == 429:
             try:
                 retry = float(response.headers.get("retry-after", ""))
@@ -184,6 +161,81 @@ class GeminiClient:
             raise CloudRuntimeError(
                 f"Gemini ha restituito HTTP {response.status_code}. Verifica disponibilità del modello e configurazione; nessun provider alternativo è stato chiamato."
             )
+
+    def _text(self, data):
+        if data.get("status") != "completed":
+            raise ValueError("Risposta Gemini incompleta o bloccata")
+        return "".join(
+            content.get("text", "")
+            for step in data.get("steps", [])
+            if step.get("type") == "model_output"
+            for content in step.get("content", [])
+            if content.get("type") == "text"
+        )
+
+    def generate(self, system, user, schema, *, temperature=0.9, seed=None, max_tokens=4096):
+        """One schema-constrained generation outside the evaluation flow. ``seed`` is not supported by the API."""
+        if not self.status()["ready"]:
+            raise CloudRuntimeError(self.status()["error"])
+        pacing = self.limiter.pace()
+        start = time.monotonic()
+        response = self.http.post(
+            "/v1beta/interactions",
+            json={
+                "model": self.model,
+                "system_instruction": system,
+                "input": user,
+                "store": False,
+                "stream": False,
+                "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
+                "generation_config": {
+                    "temperature": temperature,
+                    "max_output_tokens": max_tokens,
+                    "thinking_level": "minimal" if self.model.endswith("flash-lite") else "low",
+                },
+            },
+        )
+        self._check(response)
+        response.raise_for_status()
+        data = response.json()
+        usage = data.get("usage", {})
+        return {
+            "raw": self._text(data),
+            "seconds": time.monotonic() - start,
+            "pacing_seconds": pacing,
+            "tokens": usage.get("total_output_tokens", 0),
+            "prompt_tokens": usage.get("total_input_tokens", 0),
+            "provider": self.provider,
+            "model": data.get("model", self.model),
+        }
+
+    def evaluate(self, payload):
+        if not self.status()["ready"]:
+            raise CloudRuntimeError(self.status()["error"])
+        pacing = self.limiter.pace()
+        start = time.monotonic()
+        view = model_view(payload)
+        response = self.http.post(
+            "/v1beta/interactions",
+            json={
+                "model": self.model,
+                "system_instruction": SYSTEM_PROMPT,
+                "input": json.dumps(view, ensure_ascii=False),
+                "store": False,
+                "stream": False,
+                "response_format": {
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": evaluation_schema(view),
+                },
+                "generation_config": {
+                    "temperature": 0,
+                    "max_output_tokens": 1024,
+                    "thinking_level": "minimal" if self.model.endswith("flash-lite") else "low",
+                },
+            },
+        )
+        self._check(response)
         response.raise_for_status()
         data = response.json()
         if data.get("status") != "completed":
@@ -195,7 +247,7 @@ class GeminiClient:
             for content in step.get("content", [])
             if content.get("type") == "text"
         )
-        evaluation, normalizations = validate_evaluation(raw, payload)
+        evaluation, normalizations = validate_evaluation(raw, view)
         usage = data.get("usage", {})
         return {
             "evaluation": evaluation,

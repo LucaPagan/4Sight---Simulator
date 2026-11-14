@@ -11,15 +11,56 @@ import pandas as pd
 from .agents import OllamaClient, evaluation_plan
 from .audience import age_predictions, generate_population
 from .behavior import policy_signals, simulate_panel
+from .calibration import apply_ctr_shifts, creative_features, shifts_for
 from .cloud import CloudQuotaError, CloudRuntimeError, GeminiClient, credentials_path, read_credentials
 from .cloudflare import CloudflareClient
 from .config import Settings
+from .counterfactual import run_counterfactuals
 from .datasets import audit_dataset, load_dataset
+from .decision_quality import assess_decisions
+from .decision_quality import export_rubric as export_decision_rubric
+from .domain import Domain, assess_domain
 from .evidence import ASSUMPTIONS, EVIDENCE
 from .forecasting import forecast, forecast_new_campaign, train_model_registry, validate_models
+from .native_engine import simulate_agent_native
+from .persona_cards import BATCH_SIZE, PersonaWriter
+from .persona_model import generate_targeted_population
+from .reactions import REACTION_PROMPT_VERSION, decide, reaction_plan
 from .reporting import audit_predictions, build_report, compare_predictions
 from .repository import ArtifactStore, Repository
-from .schemas import CampaignBrief
+from .schemas import CampaignBrief, ReachSummary, TargetingAnalyzeRequest
+from .stimulus_view import SLOTS
+from .targeting import analyze_targeting
+
+CALIBRATION_KEY = "validation/calibration.json"
+
+
+def reaction_summary(decisions):
+    """Mean of the per-100 answers by creative and slot. Descriptive of the model's hypotheses, not a forecast."""
+    groups = {}
+    for d in decisions:
+        groups.setdefault((d["creative_id"], d["slot"]), []).append(d["result"]["decision"])
+    return [
+        {
+            "creative_id": creative,
+            "slot": slot,
+            "personas": len(items),
+            **{
+                name: round(sum(i[f"{name}_per_100"] for i in items) / len(items), 2)
+                for name in ("skip", "stop", "engage", "click")
+            },
+        }
+        for (creative, slot), items in sorted(groups.items())
+    ]
+
+
+def effective_brief(brief, scenario):
+    """The brief the forecast uses: with a sampled targeting, the age mix is the one the ad would reach."""
+    reach = (scenario.get("targeting_report") or {}).get("reach")
+    if not reach:
+        return brief
+    shares = [float(x) for x in reach["age_shares"]]
+    return brief.model_copy(update={"age_shares": [x / sum(shares) for x in shares]})
 
 
 class SimulationService:
@@ -242,7 +283,11 @@ class SimulationService:
                 "dataset_snapshot": dataset.get("snapshot_key") if dataset else None,
             },
         )
-        profiles = generate_population(brief)
+        reach = None
+        if brief.targeting is not None:
+            profiles, reach = generate_targeted_population(brief)
+        else:
+            profiles = generate_population(brief)
         population = self.repo.create(
             "populations",
             {"scenario_id": scenario["id"], "seed": brief.seed, "size": len(profiles), "profiles": profiles},
@@ -251,10 +296,199 @@ class SimulationService:
             "consumer_profiles", [{"payload": {**p, "population_id": population["id"]}} for p in profiles]
         )
         scenario["population_id"] = population["id"]
+        if brief.targeting is not None:
+            scenario["targeting_report"] = analyze_targeting(
+                TargetingAnalyzeRequest(
+                    country=brief.country,
+                    vertical=brief.vertical,
+                    device=brief.device,
+                    targeting=brief.targeting,
+                ),
+                applied_to_population=True,
+                reach=ReachSummary.model_validate(reach),
+            ).model_dump(mode="json")
         self.repo.replace("scenarios", scenario["id"], scenario)
         return scenario
 
-    def preflight(self, scenario_id, client=None, provider="ollama", model=None):
+    def write_personas(self, scenario_id, client=None, provider="ollama", model=None):
+        """Stage 2: persona cards for the scenario's panel. Cached per skeleton, so reruns only write what is missing."""
+        scenario = self.repo.get("scenarios", scenario_id)
+        brief = CampaignBrief.model_validate(scenario["brief"])
+        population = self.repo.get("populations", scenario["population_id"])
+        client = client or self.client(provider, model)
+        runtime = client.status()
+        if not runtime["ready"]:
+            raise ValueError(runtime.get("error") or "Runtime non pronto")
+        writer = PersonaWriter(
+            self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
+        )
+        cards, report = writer.write(population["profiles"])
+        self.repo.replace(
+            "populations", population["id"], {**population, "cards": cards, "persona_report": report}
+        )
+        return {"population_id": population["id"], "cards": cards, "report": report}
+
+    def run_reactions(
+        self, scenario_id, client=None, provider="ollama", model=None, slots=("first",), limit=None
+    ):
+        """Stage 3 without the simulation engine: persona reactions (``agent-reaction-v8``), cached per exposure.
+
+        Quota errors propagate and finished reactions stay cached. A reaction that stays invalid after one retry is
+        counted as failed, never replaced by an invented one."""
+        scenario = self.repo.get("scenarios", scenario_id)
+        brief = CampaignBrief.model_validate(scenario["brief"])
+        population = self.repo.get("populations", scenario["population_id"])
+        if not population.get("cards"):
+            raise ValueError("Mancano le schede-persona: scrivile prima di simulare le reazioni")
+        client = client or self.client(provider, model)
+        runtime = client.status()
+        if not runtime["ready"]:
+            raise ValueError(runtime.get("error") or "Runtime non pronto")
+        plan = reaction_plan(
+            brief, population["profiles"], population["cards"], runtime["digest"], slots=tuple(slots)
+        )
+        selected = plan[:limit] if limit else plan
+        decisions, failed, cached, answered = [], 0, 0, []
+        for item in selected:
+            stored = self.repo.get_decision(item["key"])
+            if stored:
+                cached += 1
+                record = stored["result"]
+            else:
+                record = None
+                for _ in range(2):
+                    try:
+                        record = decide(client, item["input"])
+                        break
+                    except CloudQuotaError:
+                        raise
+                    except (ValueError, KeyError, json.JSONDecodeError, httpx.HTTPError):
+                        continue
+                if record is None:
+                    failed += 1
+                    continue
+                self.repo.save_decision(item["key"], {"digest": runtime["digest"], "result": record})
+            answered.append(item)
+            decisions.append(
+                {k: item[k] for k in ("agent_id", "creative_id", "slot", "regime", "placement")}
+                | {"result": record}
+            )
+        return {
+            "required": len(plan),
+            "evaluated": len(selected),
+            "from_cache": cached,
+            "failed": failed,
+            "summary": reaction_summary(decisions),
+            "quality": assess_decisions(
+                [
+                    {
+                        "key": item["key"],
+                        "agent_id": d["agent_id"],
+                        "creative_id": d["creative_id"],
+                        "slot": d["slot"],
+                        "input": item["input"],
+                        "decision": d["result"]["decision"],
+                    }
+                    for item, d in zip(answered, decisions, strict=True)
+                ],
+                {p["agent_id"]: p for p in population["profiles"]},
+            )
+            if decisions
+            else None,
+            "decisions": decisions,
+            "evidence": "hypothesis",
+            "validated": False,
+        }
+
+    def native_preflight(self, scenario_id, client, provider, slots):
+        """Cost of an agent_native run: persona cards still to write plus reactions still to ask for."""
+        scenario = self.repo.get("scenarios", scenario_id)
+        brief = CampaignBrief.model_validate(scenario["brief"])
+        population = self.repo.get("populations", scenario["population_id"])
+        profiles = population["profiles"]
+        runtime = client.status()
+        digest = runtime["digest"] or "pending-runtime"
+        writer = PersonaWriter(self.repo, client, digest, brief.vertical, brief.country, brief.brand)
+        cards_missing = (
+            0
+            if population.get("cards")
+            else sum(not (runtime["ready"] and self.repo.get_card(writer.key(p))) for p in profiles)
+        )
+        if population.get("cards"):
+            plan = reaction_plan(brief, profiles, population["cards"], digest, slots=tuple(slots))
+            required = len(plan)
+            cached = sum(bool(self.repo.get_decision(p["key"])) for p in plan) if runtime["ready"] else 0
+        else:
+            from datetime import timedelta
+
+            from .context import calendar_regime
+
+            regimes = {
+                calendar_regime(brief.date_from + timedelta(days=d))
+                for d in range((brief.date_to - brief.date_from).days + 1)
+            }
+            required, cached = len(profiles) * len(brief.creatives) * len(regimes) * len(slots), 0
+        new = required - cached
+        card_calls = -(-cards_missing // BATCH_SIZE)
+        return {
+            "mode": "agent_native",
+            "runtime": runtime,
+            "required_policies": required,
+            "cached_policies": cached,
+            "new_policies": new,
+            "persona_cards_to_write": cards_missing,
+            "persona_card_calls": card_calls,
+            "max_attempts_with_retry": 2 * new + 3 * card_calls,
+            "within_limit": 2 * new <= self.cfg.max_evaluations,
+            "estimated_seconds": (new + card_calls) * client.interval
+            if hasattr(client, "interval")
+            else None,
+            "timing_observations": 0,
+            "estimate_note": "Stima dal solo limite di richieste al minuto del provider; esclude retry e latenza."
+            if hasattr(client, "interval")
+            else "Durata non stimabile per questo runtime.",
+            "population_size": len(profiles),
+            "slots": list(slots),
+            "model": client.model,
+            "provider": provider,
+            "daily_free_neurons": runtime.get("daily_free_neurons"),
+        }
+
+    def counterfactuals(self, scenario_id, client=None, provider="ollama", model=None, n_pairs=12):
+        """Metamorphic tests of the reaction prompt on this scenario's panel (see ``counterfactual.py``)."""
+        scenario = self.repo.get("scenarios", scenario_id)
+        brief = CampaignBrief.model_validate(scenario["brief"])
+        population = self.repo.get("populations", scenario["population_id"])
+        if not population.get("cards"):
+            raise ValueError("Mancano le schede-persona: scrivile prima di eseguire i test contro-fattuali")
+        client = client or self.client(provider, model)
+        runtime = client.status()
+        if not runtime["ready"]:
+            raise ValueError(runtime.get("error") or "Runtime non pronto")
+        return run_counterfactuals(
+            client, brief, population["profiles"], population["cards"], runtime["digest"], self.repo, n_pairs
+        )
+
+    def rubric(self, run_id, n=60, seed=0):
+        """Blind sample of an agent_native run for human raters. Keep ``key`` apart from the CSV given to raters."""
+        result = self.result(run_id)
+        if result.get("mode") != "agent_native":
+            raise ValueError("La rubrica riguarda le run agent_native")
+        records = [
+            {
+                **{k: s[k] for k in ("key", "agent_id", "creative_id", "slot")},
+                "input": s["input"],
+                "decision": s["decision"],
+            }
+            for s in result["decision_snapshot"]
+        ]
+        return export_decision_rubric(records, n, seed)
+
+    def preflight(
+        self, scenario_id, client=None, provider="ollama", model=None, mode="history_forecast", slots=SLOTS
+    ):
+        if mode == "agent_native":
+            return self.native_preflight(scenario_id, client or self.client(provider, model), provider, slots)
         scenario = self.repo.get("scenarios", scenario_id)
         brief = CampaignBrief.model_validate(scenario["brief"])
         profiles = self.repo.get("populations", scenario["population_id"])["profiles"]
@@ -365,7 +599,38 @@ class SimulationService:
         ]
         return kit, pd.DataFrame(rows)
 
-    def predict_brief(self, brief, signal_effects=None):
+    def panel_calibration(self, brief, plan, policies, assessment):
+        """Calibrated panel shift per creative, or zeros with the reason it was not applied."""
+        zero = dict.fromkeys((c.id for c in brief.creatives), 0.0)
+        domain = assessment
+        info = {"applied": False, "domain_status": domain.status, "benchmark_id": domain.benchmark_id}
+        try:
+            artifact = self.store.read_json(CALIBRATION_KEY)
+        except FileNotFoundError:
+            return zero, {**info, "reason": "Nessuna calibrazione appresa su campagne reali."}
+        info["gate"] = artifact["gate"]
+        if not artifact["gate"]["passed"]:
+            return zero, {**info, "reason": "La calibrazione non ha superato la verifica fuori campione."}
+        if not domain.verified:
+            return zero, {**info, "reason": domain.reason}
+        features = {
+            c.id: creative_features(
+                [
+                    {"input": p["input"], "evaluation": policies[p["key"]]}
+                    for p in plan
+                    if p["creative_id"] == c.id and p["key"] in policies
+                ]
+            )
+            for c in brief.creatives
+        }
+        shifts = shifts_for(artifact, features)
+        return shifts, {
+            **info,
+            "applied": True,
+            "reason": "Spostamento relativo calibrato su campagne escluse.",
+        }
+
+    def predict_brief(self, brief, signal_effects=None, ctr_shifts=None):
         kit, frame = self.rows_for_brief(brief)
         predictions, draws = forecast_new_campaign(
             kit, self.get_models(), frame, seed=brief.seed, n_draws=self.cfg.monte_carlo_draws
@@ -398,6 +663,8 @@ class SimulationService:
                 r["expected_impressions"] /= ratio
                 r["expected_clicks"] /= ratio
                 r["assumptions"].append("market_context_ratio_unvalidated")
+        if ctr_shifts:
+            apply_ctr_shifts(predictions, draws, ctr_shifts)
         ages = age_predictions(
             draws,
             brief.seed,
@@ -444,7 +711,9 @@ class SimulationService:
             return
         client = client or self.client(run.get("provider", "ollama"), run.get("requested_model"))
         scenario = self.repo.get("scenarios", run["scenario_id"])
-        brief = CampaignBrief.model_validate(scenario["brief"])
+        brief = effective_brief(CampaignBrief.model_validate(scenario["brief"]), scenario)
+        if run.get("mode") == "agent_native":
+            return self._execute_native_run(run_id, run, client, scenario, brief)
         profiles = self.repo.get("populations", scenario["population_id"])["profiles"]
         try:
             self.repo.update_run(
@@ -570,16 +839,22 @@ class SimulationService:
                 raise ValueError("Copertura panel incompleta")
             self.repo.update_run(run_id, completed_policies=len(policies), phase="behavior", progress=85)
             signals = policy_signals(brief, profiles, policies, plan, predictions)
-            predictions, draws = self.predict_brief(brief, signals)
+            assessment = assess_domain(
+                Domain.from_brief(brief),
+                getattr(client, "prompt_version", None),
+                getattr(client, "model", None),
+            )
+            shifts, panel_calibration = self.panel_calibration(brief, plan, policies, assessment)
+            predictions, draws = self.predict_brief(brief, signals, shifts)
             behavior = simulate_panel(brief, profiles, policies, plan, predictions)
-            comparison = compare_predictions(predictions, draws)
+            comparison = compare_predictions(predictions, draws, assessment)
             coverage = {
                 "required": len(plan),
                 "completed": len(policies),
                 "ratio": 1.0,
                 "profiles": len(profiles),
             }
-            report = build_report(brief, predictions, behavior, comparison, coverage)
+            report = build_report(brief, predictions, behavior, comparison, coverage, panel_calibration)
             audit_predictions(predictions, brief.daily_adset_budget_eur)
             result = {
                 "run_id": run_id,
@@ -591,7 +866,10 @@ class SimulationService:
                 "report": report,
                 "coverage": coverage,
                 "completion_status": "complete",
-                "quantitative_source": "historical_baseline_with_age_reconciliation",
+                "quantitative_source": "historical_baseline_with_calibrated_panel_shift"
+                if panel_calibration["applied"]
+                else "historical_baseline_with_age_reconciliation",
+                "panel_calibration": panel_calibration,
                 "model": {
                     "name": client.model,
                     "digest": runtime["digest"],
@@ -614,40 +892,243 @@ class SimulationService:
                     for item in plan
                 ],
             }
-            key = f"runs/{run_id}.json"
-            self.store.write_json(key, result)
-            with self.repo.transaction():
-                if not self.repo.finish_run(
+            self._publish(run_id, result, predictions, behavior, report)
+        except Exception as exc:
+            self.repo.update_run(
+                run_id, status="failed", phase="error", error=f"{type(exc).__name__}: {str(exc)[:300]}"
+            )
+
+    def _publish(self, run_id, result, predictions, behavior, report):
+        key = f"runs/{run_id}.json"
+        self.store.write_json(key, result)
+        with self.repo.transaction():
+            if not self.repo.finish_run(
+                run_id,
+                status="succeeded",
+                phase="complete",
+                completion_status="complete",
+                progress=100,
+                result_key=key,
+                error=None,
+            ):
+                return
+            self.repo.bulk_create("predictions", [{"payload": {"run_id": run_id, **r}} for r in predictions])
+            self.repo.bulk_create(
+                "age_predictions",
+                [
+                    {"payload": {"run_id": run_id, "ad_id": r["ad_id"], "date": r["date"], **a}}
+                    for r in predictions
+                    for a in r["ages"]
+                ],
+            )
+            self.repo.bulk_create(
+                "consumer_states", [{"payload": {"run_id": run_id, **s}} for s in behavior["states"]]
+            )
+            self.repo.bulk_create(
+                "exposure_events", [{"payload": {"run_id": run_id, **e}} for e in behavior["events"]]
+            )
+            self.repo.bulk_create(
+                "prediction_explanations",
+                [{"payload": {"run_id": run_id, **d}} for d in report["diagnoses"]],
+            )
+
+    def _execute_native_run(self, run_id, run, client, scenario, brief):
+        """agent_native: baseline forecast as reference, persona cards, one reaction per exposure, then the engine."""
+        population = self.repo.get("populations", scenario["population_id"])
+        profiles = population["profiles"]
+        slots = tuple(run.get("slots") or SLOTS)
+
+        def pause(status, error, **extra):
+            self.repo.update_run(run_id, status=status, error=error, **extra)
+
+        try:
+            self.repo.update_run(
+                run_id, status="running", phase="baseline", progress=max(run["progress"], 3), error=None
+            )
+            predictions, draws = self.predict_brief(brief)
+            self.store.write_json(
+                f"runs/{run_id}.preliminary.json",
+                {
+                    "profiles": profiles,
+                    "predictions": predictions,
+                    "completion_status": "preliminary",
+                    "warning": "Solo forecast storico di riferimento: le decisioni degli agenti non sono ancora complete.",
+                },
+            )
+            self.repo.update_run(run_id, result_key=f"runs/{run_id}.preliminary.json")
+            runtime = client.status()
+            if not runtime["ready"]:
+                self.repo.update_run(
                     run_id,
-                    status="succeeded",
-                    phase="complete",
-                    completion_status="complete",
-                    progress=100,
-                    result_key=key,
-                    error=None,
-                ):
+                    status="waiting_for_runtime",
+                    phase="agents",
+                    error=runtime["error"],
+                    completion_status="preliminary",
+                )
+                return
+            if run.get("model_digest") and run["model_digest"] != runtime["digest"]:
+                self.repo.update_run(
+                    run_id,
+                    status="failed",
+                    error="Digest modello cambiato: crea una nuova run",
+                    phase="agents",
+                )
+                return
+            if not population.get("cards"):
+                self.repo.update_run(run_id, phase="personas", progress=8, model_digest=runtime["digest"])
+                writer = PersonaWriter(
+                    self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
+                )
+                try:
+                    cards, persona_report = writer.write(profiles)
+                except CloudQuotaError as exc:
+                    pause("waiting_for_capacity", str(exc), retry_after_seconds=exc.retry_after_seconds)
                     return
-                self.repo.bulk_create(
-                    "predictions", [{"payload": {"run_id": run_id, **r}} for r in predictions]
+                except CloudRuntimeError as exc:
+                    pause("waiting_for_runtime", str(exc))
+                    return
+                except httpx.ConnectError:
+                    pause(
+                        "waiting_for_runtime", "Runtime disconnesso; le schede salvate restano disponibili."
+                    )
+                    return
+                population = {**population, "cards": cards, "persona_report": persona_report}
+                self.repo.replace("populations", population["id"], population)
+            plan = reaction_plan(brief, profiles, population["cards"], runtime["digest"], slots=slots)
+            self.repo.update_run(
+                run_id,
+                model_digest=runtime["digest"],
+                model_name=client.model,
+                required_policies=len(plan),
+                completion_status="partial",
+                phase="agents",
+            )
+            decisions, attempts = {}, 0
+            for item in plan:
+                if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
+                    return
+                cached = self.repo.get_decision(item["key"])
+                if cached:
+                    decisions[item["key"]] = cached["result"]
+                    continue
+                if attempts >= self.cfg.max_evaluations:
+                    pause(
+                        "waiting_for_capacity",
+                        "Limite valutazioni raggiunto. Riprendi per completare le reazioni mancanti.",
+                        completed_policies=len(decisions),
+                    )
+                    return
+                last_error = None
+                for _ in range(2):
+                    if attempts >= self.cfg.max_evaluations:
+                        break
+                    attempts += 1
+                    try:
+                        record = decide(client, item["input"])
+                        self.repo.save_decision(item["key"], {"digest": runtime["digest"], "result": record})
+                        decisions[item["key"]] = record
+                        last_error = None
+                        break
+                    except CloudQuotaError as exc:
+                        pause(
+                            "waiting_for_capacity",
+                            str(exc),
+                            retry_after_seconds=exc.retry_after_seconds,
+                            completed_policies=len(decisions),
+                        )
+                        return
+                    except CloudRuntimeError as exc:
+                        pause("waiting_for_runtime", str(exc), completed_policies=len(decisions))
+                        return
+                    except httpx.ConnectError:
+                        pause(
+                            "waiting_for_runtime",
+                            "Runtime disconnesso; le reazioni salvate restano disponibili.",
+                            completed_policies=len(decisions),
+                        )
+                        return
+                    except (httpx.HTTPError, ValueError, KeyError) as exc:
+                        last_error = (
+                            f"Reazione {item['agent_id']}/{item['creative_id']}: {type(exc).__name__}"
+                        )
+                if last_error:
+                    pause("waiting_for_capacity", last_error, completed_policies=len(decisions))
+                    return
+                self.repo.update_run(
+                    run_id,
+                    completed_policies=len(decisions),
+                    progress=10 + int(70 * len(decisions) / len(plan)),
                 )
-                self.repo.bulk_create(
-                    "age_predictions",
-                    [
-                        {"payload": {"run_id": run_id, "ad_id": r["ad_id"], "date": r["date"], **a}}
-                        for r in predictions
-                        for a in r["ages"]
-                    ],
-                )
-                self.repo.bulk_create(
-                    "consumer_states", [{"payload": {"run_id": run_id, **s}} for s in behavior["states"]]
-                )
-                self.repo.bulk_create(
-                    "exposure_events", [{"payload": {"run_id": run_id, **e}} for e in behavior["events"]]
-                )
-                self.repo.bulk_create(
-                    "prediction_explanations",
-                    [{"payload": {"run_id": run_id, **d}} for d in report["diagnoses"]],
-                )
+            if len(decisions) != len(plan):
+                raise ValueError("Copertura panel incompleta")
+            self.repo.update_run(run_id, completed_policies=len(decisions), phase="behavior", progress=85)
+            native = simulate_agent_native(brief, profiles, plan, decisions, predictions, draws)
+            assessment = assess_domain(Domain.from_brief(brief), REACTION_PROMPT_VERSION, client.model)
+            behavior = native["behavior"]
+            comparison = compare_predictions(predictions, native["draws"], assessment)
+            coverage = {
+                "required": len(plan),
+                "completed": len(decisions),
+                "ratio": 1.0,
+                "profiles": len(profiles),
+            }
+            calibration = {
+                "applied": False,
+                "reason": "agent_native: nessuna riconciliazione sul CTR storico.",
+            }
+            report = build_report(
+                brief, predictions, behavior, comparison, coverage, calibration, native=native["native"]
+            )
+            audit_predictions(predictions, brief.daily_adset_budget_eur)
+            result = {
+                "run_id": run_id,
+                "mode": "agent_native",
+                "brief": brief.model_dump(mode="json"),
+                "profiles": profiles,
+                "cards": population["cards"],
+                "persona_report": population.get("persona_report"),
+                "predictions": predictions,
+                "behavior": behavior,
+                "comparison": comparison,
+                "report": report,
+                "coverage": coverage,
+                "completion_status": "complete",
+                "quantitative_source": "agent_native_decisions",
+                "panel_calibration": calibration,
+                "model": {
+                    "name": client.model,
+                    "digest": runtime["digest"],
+                    "provider": getattr(client, "provider", "ollama"),
+                    "digest_is_weights_hash": runtime.get("digest_is_weights_hash", True),
+                    "prompt_version": REACTION_PROMPT_VERSION,
+                },
+                "provenance": {
+                    "dataset_id": scenario.get("dataset_id"),
+                    "seed": brief.seed,
+                    "profile_version": profiles[0]["profile_version"],
+                    "aggregate_model": self.get_models().version,
+                    "training_cutoff": self.get_models().cutoff,
+                    "engine_version": native["native"]["engine_version"],
+                },
+                "validated": False,
+                "uncertainty": native["native"]["uncertainty"],
+                "evidence": EVIDENCE,
+                "assumptions": ASSUMPTIONS,
+                "decision_snapshot": [
+                    {
+                        "key": i["key"],
+                        "agent_id": i["agent_id"],
+                        "creative_id": i["creative_id"],
+                        "slot": i["slot"],
+                        "regime": i["regime"],
+                        "placement": i["placement"],
+                        "input": i["input"],
+                        "decision": decisions[i["key"]]["decision"],
+                    }
+                    for i in plan
+                ],
+            }
+            self._publish(run_id, result, predictions, behavior, report)
         except Exception as exc:
             self.repo.update_run(
                 run_id, status="failed", phase="error", error=f"{type(exc).__name__}: {str(exc)[:300]}"

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from audience_simulator.domain import (
     VERIFIED_DOMAINS,
@@ -95,3 +97,24 @@ def test_missing_configuration_never_counts_as_verified():
 def test_entry_without_any_verified_configuration_is_rejected():
     with pytest.raises(ValueError):
         DomainEntry(domain=Domain.from_brief(brief()), verified_for=[])
+
+
+def test_registry_entries_need_a_committed_benchmark_manifest(tmp_path):
+    from audience_simulator.domain import registry_problems
+
+    assert registry_problems((), tmp_path) == []
+    assert registry_problems((entry(),), tmp_path) == ["manifest mancante per il benchmark b1"]
+    (tmp_path / "b1.json").write_text(
+        json.dumps({"benchmark_id": "b1", "prompt_version": "consumer-policy-v6", "model": "altro"})
+    )
+    assert "non coincide" in registry_problems((entry(),), tmp_path)[0]
+    (tmp_path / "b1.json").write_text(
+        json.dumps({"benchmark_id": "b1", "prompt_version": CONFIG.prompt_version, "model": CONFIG.model})
+    )
+    assert registry_problems((entry(),), tmp_path) == []
+
+
+def test_the_shipped_registry_has_no_unbacked_entries():
+    from audience_simulator.domain import registry_problems
+
+    assert registry_problems() == []

@@ -6,8 +6,9 @@ import time
 
 import httpx
 
-from .agents import SYSTEM_PROMPT, evaluation_schema, validate_evaluation
+from .agents import evaluation_schema, validate_evaluation
 from .cloud import CloudQuotaError, CloudRateLimiter, CloudRuntimeError
+from .prompts import PROMPT_VERSION, SYSTEM_PROMPT, model_view
 
 CLOUDFLARE_MODELS = {
     "@cf/google/gemma-4-26b-a4b-it": "Gemma 4 26B A4B · bilanciato",
@@ -21,7 +22,7 @@ NEURON_RATES = {
 
 class CloudflareClient:
     provider = "cloudflare"
-    prompt_version = "consumer-policy-v6-cloudflare-chat-v1"
+    prompt_version = f"{PROMPT_VERSION}-cloudflare-chat-v1"
 
     def __init__(
         self,
@@ -69,18 +70,71 @@ class CloudflareClient:
             "warning": "10.000 Neurons/giorno condivisi nell’account. Sul piano Free le chiamate oltre quota falliscono; sul piano Paid gli extra possono essere fatturati. Nessuna promessa di uso illimitato.",
         }
 
+    def _check(self, response):
+        if response.status_code in (429, 402):
+            raise CloudQuotaError(provider="Cloudflare")
+        if response.status_code in (401, 403):
+            raise CloudRuntimeError(
+                "Token Cloudflare o permessi Workers AI non validi. Verifica anche Account ID e piano Free."
+            )
+        if response.is_error:
+            raise CloudRuntimeError(
+                f"Cloudflare ha restituito HTTP {response.status_code}. Verifica modello, quota e configurazione; nessun fallback è stato chiamato."
+            )
+
+    def generate(self, system, user, schema, *, temperature=0.9, seed=None, max_tokens=4096):
+        """One schema-constrained generation outside the evaluation flow (persona cards and similar)."""
+        if not self.status()["ready"]:
+            raise CloudRuntimeError(self.status()["error"])
+        pacing = self.limiter.pace()
+        start = time.monotonic()
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": temperature,
+            "max_completion_tokens": max_tokens,
+            "stream": False,
+            "store": False,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "structured_output", "schema": schema, "strict": True},
+            },
+        }
+        if seed is not None:
+            body["seed"] = seed
+        response = self.http.post(f"/client/v4/accounts/{self.account_id}/ai/v1/chat/completions", json=body)
+        self._check(response)
+        response.raise_for_status()
+        data = response.json()
+        choice = data["choices"][0]
+        if choice.get("finish_reason") != "stop":
+            raise ValueError("Risposta Cloudflare incompleta o bloccata")
+        raw = choice["message"]["content"]
+        usage = data.get("usage", {})
+        return {
+            "raw": raw if isinstance(raw, str) else json.dumps(raw),
+            "seconds": time.monotonic() - start,
+            "pacing_seconds": pacing,
+            "tokens": usage.get("completion_tokens") or 0,
+            "prompt_tokens": usage.get("prompt_tokens") or 0,
+            "provider": self.provider,
+            "model": data.get("model", self.model),
+        }
+
     def evaluate(self, payload):
         if not self.status()["ready"]:
             raise CloudRuntimeError(self.status()["error"])
         pacing = self.limiter.pace()
         start = time.monotonic()
+        view = model_view(payload)
         response = self.http.post(
             f"/client/v4/accounts/{self.account_id}/ai/v1/chat/completions",
             json={
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    {"role": "user", "content": json.dumps(view, ensure_ascii=False)},
                 ],
                 "temperature": 0,
                 "seed": 42,
@@ -92,22 +146,13 @@ class CloudflareClient:
                     "type": "json_schema",
                     "json_schema": {
                         "name": "consumer_evaluation",
-                        "schema": evaluation_schema(payload),
+                        "schema": evaluation_schema(view),
                         "strict": True,
                     },
                 },
             },
         )
-        if response.status_code in (429, 402):
-            raise CloudQuotaError(provider="Cloudflare")
-        if response.status_code in (401, 403):
-            raise CloudRuntimeError(
-                "Token Cloudflare o permessi Workers AI non validi. Verifica anche Account ID e piano Free."
-            )
-        if response.is_error:
-            raise CloudRuntimeError(
-                f"Cloudflare ha restituito HTTP {response.status_code}. Verifica modello, quota e configurazione; nessun fallback è stato chiamato."
-            )
+        self._check(response)
         response.raise_for_status()
         data = response.json()
         choice = data["choices"][0]
@@ -115,7 +160,7 @@ class CloudflareClient:
             raise ValueError("Risposta Cloudflare incompleta o bloccata")
         raw = choice["message"]["content"]
         evaluation, normalizations = validate_evaluation(
-            raw if isinstance(raw, str) else json.dumps(raw), payload
+            raw if isinstance(raw, str) else json.dumps(raw), view
         )
         usage = data.get("usage", {})
         prompt_tokens = usage.get("prompt_tokens")

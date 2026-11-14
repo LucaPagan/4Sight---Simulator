@@ -41,6 +41,37 @@ def main():
     corpus.add_argument(
         "--download", action="store_true", help="Scarica le fonti fissate per checksum (solo se esplicito)"
     )
+    verify = commands.add_parser(
+        "verify", help="Verifica indipendente su corpus pubblico (dev/test bloccato)"
+    )
+    verify.add_argument("action", choices=["run", "freeze"])
+    verify.add_argument("--split", choices=["dev", "test"], default="dev")
+    verify.add_argument("--final", action="store_true", help="Valutazione finale del test, una sola volta")
+    verify.add_argument("--config", type=Path, help="JSON della configurazione da congelare")
+    verify.add_argument("--config-hash", default=None)
+    reactions = commands.add_parser("reactions", help="Valutazione umana cieca delle reazioni di una run")
+    reactions.add_argument("action", choices=["export-rubric", "score-rubric"])
+    reactions.add_argument("run_id")
+    reactions.add_argument("--n", type=int, default=60)
+    reactions.add_argument("--seed", type=int, default=0)
+    reactions.add_argument("--ratings", type=Path, nargs="*", help="CSV compilati, uno per valutatore")
+    marginals = commands.add_parser(
+        "marginals", help="Scarica da Eurostat le marginali osservate del pubblico (solo se esplicito)"
+    )
+    marginals.add_argument("action", choices=["fetch"])
+    marginals.add_argument("--countries", nargs="+", default=["IT", "ES", "FR", "DE"])
+    panel = commands.add_parser("panel", help="Esegue pannello (B2) o LLM senza profili (B1) sul corpus")
+    panel.add_argument("--system", choices=["B1", "B2"], required=True)
+    panel.add_argument("--split", choices=["dev", "test"], required=True)
+    panel.add_argument("--campaigns", type=int, default=100, help="Campagne dev da usare (campione per hash)")
+    panel.add_argument("--panel-size", type=int, default=30)
+    panel.add_argument("--max-new", type=int, default=500)
+    panel.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="gemini")
+    panel.add_argument("--model", default=None)
+    calibrate = commands.add_parser("calibrate", help="Calibrazione valutazioni->CTR relativo su sviluppo")
+    calibrate.add_argument("action", choices=["fit", "score"])
+    calibrate.add_argument("--system", choices=["B1", "B2"], required=True)
+    calibrate.add_argument("--split", choices=["dev", "test"], default="test")
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
@@ -51,7 +82,91 @@ def main():
     from .service import SimulationService
 
     service = SimulationService(settings())
-    if args.command == "corpus":
+    if args.command == "panel":
+        from .corpus import ComparableCampaign, sample_ids
+        from .panel_corpus import run_panel
+
+        if args.split == "dev":
+            dev = [ComparableCampaign.model_validate(c) for c in service.store.read_json("corpus/dev.json")]
+            chosen = set(sample_ids([c.campaign_id for c in dev], args.campaigns, "calibration-sample-v1"))
+            campaigns = [c.inputs() for c in dev if c.campaign_id in chosen]
+        else:
+            try:
+                wanted = set(service.store.read_json("validation/frozen-config.json")["sample_ids"])
+            except FileNotFoundError:
+                parser.error("Il test richiede una configurazione congelata (verify freeze)")
+            campaigns = [
+                c for c in service.store.read_json("corpus/test/inputs.json") if c["campaign_id"] in wanted
+            ]
+        result = run_panel(
+            service.store,
+            service.repo,
+            service.client(args.provider, args.model),
+            campaigns,
+            args.system,
+            args.split,
+            args.panel_size,
+            args.max_new,
+        )
+    elif args.command == "calibrate":
+        from .calibration import fit_calibration
+        from .corpus import ComparableCampaign
+        from .panel_corpus import score_with_calibration
+
+        if args.action == "fit":
+            features = service.store.read_json(f"validation/panel-features/{args.system}-dev.json")
+            dev = [
+                ComparableCampaign.model_validate(c)
+                for c in service.store.read_json("corpus/dev.json")
+                if c["campaign_id"] in features
+            ]
+            artifact, oof = fit_calibration(dev, features)
+            service.store.write_json(f"validation/calibration-{args.system}.json", artifact)
+            service.store.write_json(f"validation/scores/{args.system}-dev.json", oof)
+            result = artifact
+        else:
+            scores = score_with_calibration(service.store, args.system, args.split)
+            result = {"campaigns_scored": len(scores), "split": args.split}
+    elif args.command == "marginals":
+        from .audience_spec import MARGINALS_PATH, build_spec, fetch_marginals
+
+        data = fetch_marginals(args.countries)
+        for country in data["countries"]:
+            build_spec(data, country)
+        MARGINALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MARGINALS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+        result = {"written": str(MARGINALS_PATH), "countries": sorted(data["countries"])}
+    elif args.command == "verify":
+        from .validation import freeze_config, run_validation
+
+        if args.action == "freeze":
+            if not args.config:
+                parser.error("freeze richiede --config")
+            result = freeze_config(service.store, json.loads(args.config.read_text()))
+        else:
+            result = run_validation(service.store, args.split, final=args.final, config_hash=args.config_hash)
+    elif args.command == "reactions":
+        import csv
+
+        from .reaction_quality import export_rubric, score_rubric
+
+        records = service.result(args.run_id)["policy_snapshot"]
+        base = f"validation/rubric/{args.run_id}"
+        if args.action == "export-rubric":
+            exported = export_rubric(records, args.n, args.seed)
+            service.store.write_bytes(f"{base}/sample.csv", exported["csv"].encode(), "text/csv")
+            service.store.write_json(f"{base}/key.json", exported["key"])
+            result = {
+                "sample": f"artifacts/{base}/sample.csv",
+                "items": len(exported["key"]),
+                "rubric": exported["rubric"],
+            }
+        else:
+            if not args.ratings:
+                parser.error("score-rubric richiede --ratings")
+            ratings = {p.stem: list(csv.DictReader(p.open(encoding="utf-8"))) for p in args.ratings}
+            result = score_rubric(ratings, service.store.read_json(f"{base}/key.json"), records)
+    elif args.command == "corpus":
         import io
 
         import pandas as pd

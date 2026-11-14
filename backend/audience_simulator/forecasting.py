@@ -12,6 +12,7 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from .context import market_reference_date
+from .delivery import allocate_spend, impressions_from
 
 CATEGORICAL = ["vertical", "adset_id", "leva", "formato", "weekday"]
 NUMERIC = ["log_budget", "age_days", "history_logit", "history_log_cpm", "market_ctr", "market_cpm"]
@@ -165,23 +166,8 @@ def forecast(kit, models, rows, seed=42, n_draws=1000):
     cpm_noise = picked[:, 1, None] + rng.normal(0, models.row_noise_scale[1] + 0.12 * cold, (n_draws, n))
     p_draw = expit(logit(p)[None, :] + ctr_noise)
     cpm_draw = cpm[None, :] * np.exp(cpm_noise)
-    spend = np.zeros((n_draws, n))
-    for (_, adset), ids in rows.groupby(["data", "adset_id"], sort=False).groups.items():
-        idx = np.asarray(list(ids))
-        budget = rows.loc[idx, "budget_giornaliero_adset"].to_numpy(float)
-        if not np.allclose(budget, budget[0]):
-            raise ValueError("Budget adset-giorno incoerente")
-        usage = np.clip(models.utilization.get(adset, 0.95) + rng.normal(0, 0.025, n_draws), 0, 1)
-        known = np.array(
-            [
-                models.allocation.get(a, np.median(list(models.allocation.values())))
-                for a in rows.loc[idx, "ad_id"]
-            ]
-        )
-        weights = np.maximum(known, 0.1)[None, :] * np.exp(rng.normal(0, 0.15, (n_draws, len(idx))))
-        weights /= weights.sum(axis=1, keepdims=True)
-        spend[:, idx] = budget[0] * usage[:, None] * weights
-    impressions = spend / cpm_draw * 1000
+    spend = allocate_spend(rows, models, rng, n_draws)
+    impressions = impressions_from(spend, cpm_draw)
     clicks = impressions * p_draw
     result = []
     for i, row in rows.iterrows():

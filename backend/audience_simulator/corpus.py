@@ -306,6 +306,18 @@ def split_campaigns(campaigns, test_fraction=0.3, salt="corpus-split-v1"):
     return {"dev": dev, "test": kept, "manifest": manifest}
 
 
+def sample_ids(ids, size=60, salt="final-sample-v1"):
+    """Outcome-independent subsample: the first `size` ids ordered by a salted hash."""
+    ordered = sorted(ids)
+    if len(ordered) <= size:
+        return ordered
+    return sorted(sorted(ordered, key=lambda i: _digest(salt, i))[:size])
+
+
+def sample_campaigns(campaigns, size=60, salt="final-sample-v1"):
+    return sample_ids([c.campaign_id for c in campaigns], size, salt)
+
+
 def fetch_source(name, transport=None):
     """Download a pinned public source; refuse anything whose checksum differs."""
     if name == "upworthy":

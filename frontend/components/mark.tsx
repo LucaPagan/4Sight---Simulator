@@ -11,8 +11,11 @@ const MARKS = [
 export const markColor = (index: number) => MARKS[index % MARKS.length].color;
 export const markLetter = (index: number) => String.fromCharCode(65 + index);
 
-export function Mark({index, size = 18}: {index: number; size?: number}) {
-  const m = MARKS[index % MARKS.length];
+// Sul campo blu il cerchio blu sparirebbe: lì i segni usano la loro versione chiara.
+const ON_DARK = ["#FFFFFF", "#F0A300", "#6FD3A8", "#FFFFFF"];
+
+export function Mark({index, size = 18, onDark = false}: {index: number; size?: number; onDark?: boolean}) {
+  const m = onDark ? {color: ON_DARK[index % MARKS.length]} : MARKS[index % MARKS.length];
   return (
     <svg className="mark" width={size} height={size} viewBox="0 0 20 20" aria-hidden="true" focusable="false">
       {index % 4 === 0 && <circle cx="10" cy="10" r="9" fill={m.color} />}

@@ -1,4 +1,38 @@
 {
+  "AudienceConstraint": {
+    "additionalProperties": false,
+    "description": "The advertiser's intent on a person attribute: the person's value must (or must not) be in ``values``.",
+    "properties": {
+      "attribute": {
+        "maxLength": 60,
+        "minLength": 1,
+        "title": "Attribute",
+        "type": "string"
+      },
+      "values": {
+        "items": {
+          "maxLength": 40,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 6,
+        "minItems": 1,
+        "title": "Values",
+        "type": "array"
+      },
+      "negate": {
+        "default": false,
+        "title": "Negate",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "attribute",
+      "values"
+    ],
+    "title": "AudienceConstraint",
+    "type": "object"
+  },
   "Creative": {
     "additionalProperties": false,
     "properties": {
@@ -57,6 +91,24 @@
         "default": false,
         "title": "Claim Verified",
         "type": "boolean"
+      },
+      "offer": {
+        "default": "",
+        "maxLength": 300,
+        "title": "Offer",
+        "type": "string"
+      },
+      "price_text": {
+        "default": "",
+        "maxLength": 200,
+        "title": "Price Text",
+        "type": "string"
+      },
+      "landing_page_summary": {
+        "default": "",
+        "maxLength": 1000,
+        "title": "Landing Page Summary",
+        "type": "string"
       }
     },
     "required": [
@@ -65,6 +117,309 @@
       "primary_text"
     ],
     "title": "Creative",
+    "type": "object"
+  },
+  "CustomAudience": {
+    "additionalProperties": false,
+    "description": "Custom, lookalike or page-fan audience. Only described: its composition is a declared assumption.",
+    "properties": {
+      "kind": {
+        "enum": [
+          "custom",
+          "lookalike",
+          "page_fans"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "description": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Description",
+        "type": "string"
+      },
+      "lookalike_percent": {
+        "anyOf": [
+          {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Lookalike Percent"
+      }
+    },
+    "required": [
+      "kind",
+      "description"
+    ],
+    "title": "CustomAudience",
+    "type": "object"
+  },
+  "DetailedTerm": {
+    "additionalProperties": false,
+    "description": "One Meta detailed-targeting term. include = OR group, narrow = AND with the include group, exclude = NOT.",
+    "properties": {
+      "id": {
+        "maxLength": 80,
+        "minLength": 1,
+        "title": "Id",
+        "type": "string"
+      },
+      "mode": {
+        "default": "include",
+        "enum": [
+          "include",
+          "narrow",
+          "exclude"
+        ],
+        "title": "Mode",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "DetailedTerm",
+    "type": "object"
+  },
+  "FrequencyCap": {
+    "additionalProperties": false,
+    "properties": {
+      "max_impressions": {
+        "maximum": 50,
+        "minimum": 1,
+        "title": "Max Impressions",
+        "type": "integer"
+      },
+      "days": {
+        "default": 7,
+        "maximum": 30,
+        "minimum": 1,
+        "title": "Days",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "max_impressions"
+    ],
+    "title": "FrequencyCap",
+    "type": "object"
+  },
+  "TargetingSpec": {
+    "additionalProperties": false,
+    "description": "Everything Ads Manager lets you set for an ad set, plus the advertiser's intent in plain language.",
+    "properties": {
+      "audience_intent": {
+        "default": "",
+        "maxLength": 1000,
+        "title": "Audience Intent",
+        "type": "string"
+      },
+      "constraints": {
+        "items": {
+          "$ref": "#/$defs/AudienceConstraint"
+        },
+        "maxItems": 12,
+        "title": "Constraints",
+        "type": "array"
+      },
+      "regions": {
+        "items": {
+          "maxLength": 60,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Regions",
+        "type": "array"
+      },
+      "urbanicity": {
+        "default": "any",
+        "enum": [
+          "any",
+          "urban",
+          "suburban",
+          "rural"
+        ],
+        "title": "Urbanicity",
+        "type": "string"
+      },
+      "age_min": {
+        "default": 18,
+        "maximum": 65,
+        "minimum": 18,
+        "title": "Age Min",
+        "type": "integer"
+      },
+      "age_max": {
+        "default": 65,
+        "maximum": 65,
+        "minimum": 18,
+        "title": "Age Max",
+        "type": "integer"
+      },
+      "gender": {
+        "default": "all",
+        "enum": [
+          "all",
+          "women",
+          "men"
+        ],
+        "title": "Gender",
+        "type": "string"
+      },
+      "languages": {
+        "items": {
+          "maxLength": 10,
+          "minLength": 2,
+          "type": "string"
+        },
+        "maxItems": 10,
+        "title": "Languages",
+        "type": "array"
+      },
+      "detailed": {
+        "items": {
+          "$ref": "#/$defs/DetailedTerm"
+        },
+        "maxItems": 50,
+        "title": "Detailed",
+        "type": "array"
+      },
+      "custom_audiences": {
+        "items": {
+          "$ref": "#/$defs/CustomAudience"
+        },
+        "maxItems": 5,
+        "title": "Custom Audiences",
+        "type": "array"
+      },
+      "advantage_audience": {
+        "default": false,
+        "title": "Advantage Audience",
+        "type": "boolean"
+      },
+      "advantage_placements": {
+        "default": true,
+        "title": "Advantage Placements",
+        "type": "boolean"
+      },
+      "placements": {
+        "items": {
+          "enum": [
+            "instagram_feed",
+            "instagram_stories",
+            "instagram_reels",
+            "instagram_explore",
+            "instagram_profile_feed",
+            "facebook_feed",
+            "facebook_stories",
+            "facebook_reels",
+            "facebook_marketplace",
+            "facebook_right_column",
+            "audience_network",
+            "messenger_inbox"
+          ],
+          "type": "string"
+        },
+        "maxItems": 12,
+        "title": "Placements",
+        "type": "array"
+      },
+      "device_platforms": {
+        "items": {
+          "enum": [
+            "ios",
+            "android",
+            "desktop"
+          ],
+          "type": "string"
+        },
+        "maxItems": 3,
+        "title": "Device Platforms",
+        "type": "array"
+      },
+      "wifi_only": {
+        "default": false,
+        "title": "Wifi Only",
+        "type": "boolean"
+      },
+      "hours": {
+        "items": {
+          "maximum": 23,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 24,
+        "title": "Hours",
+        "type": "array"
+      },
+      "weekdays": {
+        "items": {
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 7,
+        "title": "Weekdays",
+        "type": "array"
+      },
+      "optimization_goal": {
+        "default": "link_clicks",
+        "enum": [
+          "link_clicks",
+          "landing_page_views",
+          "conversions",
+          "reach",
+          "impressions",
+          "leads"
+        ],
+        "title": "Optimization Goal",
+        "type": "string"
+      },
+      "bid_strategy": {
+        "default": "lowest_cost",
+        "enum": [
+          "lowest_cost",
+          "cost_cap",
+          "bid_cap",
+          "roas_goal"
+        ],
+        "title": "Bid Strategy",
+        "type": "string"
+      },
+      "bid_amount_eur": {
+        "anyOf": [
+          {
+            "maximum": 100000,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Bid Amount Eur"
+      },
+      "frequency_cap": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/FrequencyCap"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "title": "TargetingSpec",
     "type": "object"
   },
   "CampaignBrief": {
@@ -219,6 +574,15 @@
         "title": "Browsing Task",
         "type": "string"
       },
+      "device": {
+        "default": "mobile",
+        "enum": [
+          "mobile",
+          "desktop"
+        ],
+        "title": "Device",
+        "type": "string"
+      },
       "price_eur": {
         "anyOf": [
           {
@@ -237,6 +601,17 @@
         "maxLength": 2000,
         "title": "Notes",
         "type": "string"
+      },
+      "targeting": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TargetingSpec"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       }
     },
     "required": [
@@ -670,6 +1045,402 @@
       }
     },
     "title": "RuntimeSelection",
+    "type": "object"
+  },
+  "ConstraintReach": {
+    "additionalProperties": false,
+    "properties": {
+      "attribute": {
+        "title": "Attribute",
+        "type": "string"
+      },
+      "values": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Values",
+        "type": "array"
+      },
+      "negate": {
+        "title": "Negate",
+        "type": "boolean"
+      },
+      "share_in_reached": {
+        "maximum": 1,
+        "minimum": 0,
+        "title": "Share In Reached",
+        "type": "number"
+      },
+      "share_in_base": {
+        "maximum": 1,
+        "minimum": 0,
+        "title": "Share In Base",
+        "type": "number"
+      }
+    },
+    "required": [
+      "attribute",
+      "values",
+      "negate",
+      "share_in_reached",
+      "share_in_base"
+    ],
+    "title": "ConstraintReach",
+    "type": "object"
+  },
+  "PanelAudit": {
+    "additionalProperties": false,
+    "properties": {
+      "size": {
+        "title": "Size",
+        "type": "integer"
+      },
+      "duplicates": {
+        "title": "Duplicates",
+        "type": "integer"
+      },
+      "min_distance": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Min Distance"
+      },
+      "mean_distance": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mean Distance"
+      },
+      "band_counts": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "title": "Band Counts",
+        "type": "object"
+      },
+      "reach_effective_ratio": {
+        "maximum": 1,
+        "minimum": 0,
+        "title": "Reach Effective Ratio",
+        "type": "number"
+      },
+      "missing_values": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Missing Values",
+        "type": "array"
+      },
+      "status": {
+        "enum": [
+          "ok",
+          "warning"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Warnings",
+        "type": "array"
+      }
+    },
+    "required": [
+      "size",
+      "duplicates",
+      "min_distance",
+      "mean_distance",
+      "band_counts",
+      "reach_effective_ratio",
+      "missing_values",
+      "status",
+      "warnings"
+    ],
+    "title": "PanelAudit",
+    "type": "object"
+  },
+  "ProxySuggestion": {
+    "additionalProperties": false,
+    "properties": {
+      "attribute": {
+        "title": "Attribute",
+        "type": "string"
+      },
+      "values": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Values",
+        "type": "array"
+      },
+      "meta_direct": {
+        "title": "Meta Direct",
+        "type": "boolean"
+      },
+      "suggested_terms": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Suggested Terms",
+        "type": "array"
+      },
+      "selected_terms": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Selected Terms",
+        "type": "array"
+      },
+      "expected_precision": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Precision"
+      },
+      "precision_evidence": {
+        "const": "assumption",
+        "default": "assumption",
+        "title": "Precision Evidence",
+        "type": "string"
+      }
+    },
+    "required": [
+      "attribute",
+      "values",
+      "meta_direct",
+      "suggested_terms",
+      "selected_terms"
+    ],
+    "title": "ProxySuggestion",
+    "type": "object"
+  },
+  "ReachSummary": {
+    "additionalProperties": false,
+    "description": "Who the simulated ad would reach, from the sampled pool. Probabilities derive from declared assumptions.",
+    "properties": {
+      "method": {
+        "const": "importance_resampling_v1",
+        "title": "Method",
+        "type": "string"
+      },
+      "evidence": {
+        "const": "assumption",
+        "default": "assumption",
+        "title": "Evidence",
+        "type": "string"
+      },
+      "pool_size": {
+        "title": "Pool Size",
+        "type": "integer"
+      },
+      "age_shares": {
+        "items": {
+          "type": "number"
+        },
+        "maxItems": 6,
+        "minItems": 6,
+        "title": "Age Shares",
+        "type": "array"
+      },
+      "constraints": {
+        "items": {
+          "$ref": "#/$defs/ConstraintReach"
+        },
+        "title": "Constraints",
+        "type": "array"
+      },
+      "ideal_share_in_reached": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Ideal Share In Reached"
+      },
+      "ideal_share_in_base": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Ideal Share In Base"
+      },
+      "lift": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Lift"
+      },
+      "unmodelled_terms": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Unmodelled Terms",
+        "type": "array"
+      },
+      "audit": {
+        "$ref": "#/$defs/PanelAudit"
+      }
+    },
+    "required": [
+      "method",
+      "pool_size",
+      "age_shares",
+      "constraints",
+      "unmodelled_terms",
+      "audit"
+    ],
+    "title": "ReachSummary",
+    "type": "object"
+  },
+  "TargetingNote": {
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "severity": {
+        "enum": [
+          "info",
+          "warning",
+          "blocking"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      }
+    },
+    "required": [
+      "code",
+      "severity",
+      "message"
+    ],
+    "title": "TargetingNote",
+    "type": "object"
+  },
+  "TargetingReport": {
+    "additionalProperties": false,
+    "description": "How a TargetingSpec is read: the intent as constraints, how Meta could reach it, and what is lost.",
+    "properties": {
+      "constraints": {
+        "items": {
+          "$ref": "#/$defs/AudienceConstraint"
+        },
+        "title": "Constraints",
+        "type": "array"
+      },
+      "unrecognized_intent": {
+        "title": "Unrecognized Intent",
+        "type": "string"
+      },
+      "proxies": {
+        "items": {
+          "$ref": "#/$defs/ProxySuggestion"
+        },
+        "title": "Proxies",
+        "type": "array"
+      },
+      "notes": {
+        "items": {
+          "$ref": "#/$defs/TargetingNote"
+        },
+        "title": "Notes",
+        "type": "array"
+      },
+      "placements": {
+        "items": {
+          "enum": [
+            "instagram_feed",
+            "instagram_stories",
+            "instagram_reels",
+            "instagram_explore",
+            "instagram_profile_feed",
+            "facebook_feed",
+            "facebook_stories",
+            "facebook_reels",
+            "facebook_marketplace",
+            "facebook_right_column",
+            "audience_network",
+            "messenger_inbox"
+          ],
+          "type": "string"
+        },
+        "title": "Placements",
+        "type": "array"
+      },
+      "applied_to_population": {
+        "title": "Applied To Population",
+        "type": "boolean"
+      },
+      "reading": {
+        "const": "rules_v1",
+        "default": "rules_v1",
+        "title": "Reading",
+        "type": "string"
+      },
+      "reach": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReachSummary"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "constraints",
+      "unrecognized_intent",
+      "proxies",
+      "notes",
+      "placements",
+      "applied_to_population"
+    ],
+    "title": "TargetingReport",
     "type": "object"
   }
 }

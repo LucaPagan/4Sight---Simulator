@@ -90,7 +90,7 @@ def test_public_panel_resumes_and_scoring_rejects_tampered_snapshot(tmp_path, mo
     def respond(request):
         if request.url.path == "/api/tags":
             return httpx.Response(200, json={"models": [{"name": "test", "digest": "digest"}]})
-        payload = json.loads(json.loads(request.content)["messages"][1]["content"].split("Dati:\n")[1])
+        payload = json.loads(json.loads(request.content)["prompt"].split("Dati:\n")[1])
         received.append(payload)
         evaluation = AgentEvaluation(
             clarity=3,
@@ -101,7 +101,7 @@ def test_public_panel_resumes_and_scoring_rejects_tampered_snapshot(tmp_path, mo
             evidence=["creative.primary_text"],
             conditional_reaction="Ci penserei.",
         )
-        return httpx.Response(200, json={"done": True, "message": {"content": evaluation.model_dump_json()}})
+        return httpx.Response(200, json={"done": True, "response": evaluation.model_dump_json()})
 
     client = OllamaClient(model="test", transport=httpx.MockTransport(respond))
     first = module.run_public_campaign(service, case_id, client, max_new=1)
@@ -112,7 +112,7 @@ def test_public_panel_resumes_and_scoring_rejects_tampered_snapshot(tmp_path, mo
     assert result["status"] == "complete"
     assert result["required"] == result["completed"] == 240
     assert result["cached"] == 1
-    assert len({p["profile"]["agent_id"] for p in received}) == 120
+    assert len({json.dumps(p["profile"], sort_keys=True) for p in received}) == 120
     assert all("clicks" not in p["campaign"] and "impressions" not in p["campaign"] for p in received)
     assert "charitable" in received[0]["profile"]["category_context"]
     assert result["new_attempts"] == 239

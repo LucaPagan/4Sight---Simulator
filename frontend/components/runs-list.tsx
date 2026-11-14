@@ -38,7 +38,7 @@ export function RunsList() {
             return (
               <li key={run.id}>
                 <Link href={`/results/${run.id}`}>
-                  <span className="row-main"><b>{runLabel(run, runNames)}</b><small>{dateTime(run.created_at)} · {fmt(run.completed_policies)} di {fmt(run.required_policies)} valutazioni</small></span>
+                  <span className="row-main"><b>{runLabel(run, runNames)}</b><small>{dateTime(run.created_at)} · {fmt(run.completed_policies)} di {fmt(run.required_policies)} {run.mode === "agent_native" ? "reazioni · persone simulate" : "valutazioni"}</small></span>
                   {runWinners[run.id] !== undefined && <span className="mark-label"><Mark index={runWinners[run.id]} />Vince {markLetter(runWinners[run.id])}</span>}
                   <span className={`badge ${state.tone}`}>{state.label}</span>
                   <ChevronRight size={20} aria-hidden="true" />

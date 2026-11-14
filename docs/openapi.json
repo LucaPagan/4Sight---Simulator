@@ -355,6 +355,261 @@
         }
       }
     },
+    "/api/v1/scenarios/{scenario_id}/personas": {
+      "post": {
+        "summary": "Write Personas",
+        "description": "Write (or reuse from cache) a persona card for every person in the scenario's targeted panel.\n\nSynchronous: with a hosted model this takes minutes. Progress is cached per person, so a quota error can be resumed.",
+        "operationId": "write_personas_api_v1_scenarios__scenario_id__personas_post",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios/{scenario_id}/reactions": {
+      "post": {
+        "summary": "Run Reactions",
+        "description": "Persona reactions to the ad as seen (``agent-reaction-v8``). Synchronous; ``limit`` allows a small smoke test.",
+        "operationId": "run_reactions_api_v1_scenarios__scenario_id__reactions_post",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReactionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios/{scenario_id}/quality/counterfactual": {
+      "post": {
+        "summary": "Counterfactual",
+        "description": "Metamorphic tests of the reaction prompt: does the decision move when one fact changes? Synchronous.",
+        "operationId": "counterfactual_api_v1_scenarios__scenario_id__quality_counterfactual_post",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CounterfactualRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/simulations/{run_id}/rubric": {
+      "get": {
+        "summary": "Rubric",
+        "description": "Blind rubric CSV for human raters and, apart, the key that maps blind ids back to exposures.",
+        "operationId": "rubric_api_v1_simulations__run_id__rubric_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60,
+              "title": "N"
+            }
+          },
+          {
+            "name": "seed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Seed"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/targeting/catalog": {
+      "get": {
+        "summary": "Targeting Catalog",
+        "description": "What the targeting form can offer: placements, detailed terms and the person attributes constraints can use.",
+        "operationId": "targeting_catalog_api_v1_targeting_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/targeting/analyze": {
+      "post": {
+        "summary": "Targeting Analyze",
+        "operationId": "targeting_analyze_api_v1_targeting_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TargetingAnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/assets": {
       "get": {
         "summary": "Assets",
@@ -1127,6 +1382,40 @@
         ],
         "title": "AgePrediction"
       },
+      "AudienceConstraint": {
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Attribute"
+          },
+          "values": {
+            "items": {
+              "type": "string",
+              "maxLength": 40,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Values"
+          },
+          "negate": {
+            "type": "boolean",
+            "title": "Negate",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "attribute",
+          "values"
+        ],
+        "title": "AudienceConstraint",
+        "description": "The advertiser's intent on a person attribute: the person's value must (or must not) be in ``values``."
+      },
       "Body_import_files_api_v1_datasets_import_post": {
         "properties": {
           "files": {
@@ -1295,6 +1584,15 @@
             "title": "Browsing Task",
             "default": "casual_scrolling"
           },
+          "device": {
+            "type": "string",
+            "enum": [
+              "mobile",
+              "desktop"
+            ],
+            "title": "Device",
+            "default": "mobile"
+          },
           "price_eur": {
             "anyOf": [
               {
@@ -1312,6 +1610,16 @@
             "maxLength": 2000,
             "title": "Notes",
             "default": ""
+          },
+          "targeting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TargetingSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -1392,6 +1700,42 @@
         ],
         "title": "ConsumerProfile"
       },
+      "CounterfactualRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "gemini",
+              "cloudflare"
+            ],
+            "title": "Provider",
+            "default": "ollama"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "n_pairs": {
+            "type": "integer",
+            "maximum": 60.0,
+            "minimum": 4.0,
+            "title": "N Pairs",
+            "default": 12
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CounterfactualRequest"
+      },
       "Creative": {
         "properties": {
           "id": {
@@ -1449,6 +1793,24 @@
             "type": "boolean",
             "title": "Claim Verified",
             "default": false
+          },
+          "offer": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Offer",
+            "default": ""
+          },
+          "price_text": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Price Text",
+            "default": ""
+          },
+          "landing_page_summary": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Landing Page Summary",
+            "default": ""
           }
         },
         "additionalProperties": false,
@@ -1459,6 +1821,73 @@
           "primary_text"
         ],
         "title": "Creative"
+      },
+      "CustomAudience": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "custom",
+              "lookalike",
+              "page_fans"
+            ],
+            "title": "Kind"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Description"
+          },
+          "lookalike_percent": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lookalike Percent"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "description"
+        ],
+        "title": "CustomAudience",
+        "description": "Custom, lookalike or page-fan audience. Only described: its composition is a declared assumption."
+      },
+      "DetailedTerm": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "include",
+              "narrow",
+              "exclude"
+            ],
+            "title": "Mode",
+            "default": "include"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "DetailedTerm",
+        "description": "One Meta detailed-targeting term. include = OR group, narrow = AND with the include group, exclude = NOT."
       },
       "ExportRequest": {
         "properties": {
@@ -1488,6 +1917,29 @@
           "run_id"
         ],
         "title": "ExportRequest"
+      },
+      "FrequencyCap": {
+        "properties": {
+          "max_impressions": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Impressions"
+          },
+          "days": {
+            "type": "integer",
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "default": 7
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "max_impressions"
+        ],
+        "title": "FrequencyCap"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1607,6 +2059,33 @@
           "scenario_id": {
             "type": "string",
             "title": "Scenario Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "history_forecast",
+              "agent_native"
+            ],
+            "title": "Mode",
+            "default": "history_forecast"
+          },
+          "slots": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "first",
+                "repeat",
+                "saturated"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Slots",
+            "default": [
+              "first",
+              "repeat",
+              "saturated"
+            ]
           }
         },
         "additionalProperties": false,
@@ -1615,6 +2094,64 @@
           "scenario_id"
         ],
         "title": "PreflightRequest"
+      },
+      "ReactionRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "gemini",
+              "cloudflare"
+            ],
+            "title": "Provider",
+            "default": "ollama"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "slots": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "first",
+                "repeat",
+                "saturated"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Slots",
+            "default": [
+              "first"
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReactionRequest"
       },
       "RuntimeCredentials": {
         "properties": {
@@ -1734,6 +2271,33 @@
             "maxLength": 120,
             "minLength": 1,
             "title": "Idempotency Key"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "history_forecast",
+              "agent_native"
+            ],
+            "title": "Mode",
+            "default": "history_forecast"
+          },
+          "slots": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "first",
+                "repeat",
+                "saturated"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Slots",
+            "default": [
+              "first",
+              "repeat",
+              "saturated"
+            ]
           }
         },
         "additionalProperties": false,
@@ -1893,6 +2457,259 @@
           "required_policies"
         ],
         "title": "SimulationRun"
+      },
+      "TargetingAnalyzeRequest": {
+        "properties": {
+          "country": {
+            "type": "string",
+            "enum": [
+              "IT",
+              "ES",
+              "FR",
+              "DE"
+            ],
+            "title": "Country",
+            "default": "IT"
+          },
+          "vertical": {
+            "type": "string",
+            "enum": [
+              "beauty_skincare",
+              "pet_ecommerce",
+              "abbigliamento"
+            ],
+            "title": "Vertical",
+            "default": "pet_ecommerce"
+          },
+          "device": {
+            "type": "string",
+            "enum": [
+              "mobile",
+              "desktop"
+            ],
+            "title": "Device",
+            "default": "mobile"
+          },
+          "targeting": {
+            "$ref": "#/components/schemas/TargetingSpec"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "targeting"
+        ],
+        "title": "TargetingAnalyzeRequest"
+      },
+      "TargetingSpec": {
+        "properties": {
+          "audience_intent": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Audience Intent",
+            "default": ""
+          },
+          "constraints": {
+            "items": {
+              "$ref": "#/components/schemas/AudienceConstraint"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Constraints"
+          },
+          "regions": {
+            "items": {
+              "type": "string",
+              "maxLength": 60,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Regions"
+          },
+          "urbanicity": {
+            "type": "string",
+            "enum": [
+              "any",
+              "urban",
+              "suburban",
+              "rural"
+            ],
+            "title": "Urbanicity",
+            "default": "any"
+          },
+          "age_min": {
+            "type": "integer",
+            "maximum": 65.0,
+            "minimum": 18.0,
+            "title": "Age Min",
+            "default": 18
+          },
+          "age_max": {
+            "type": "integer",
+            "maximum": 65.0,
+            "minimum": 18.0,
+            "title": "Age Max",
+            "default": 65
+          },
+          "gender": {
+            "type": "string",
+            "enum": [
+              "all",
+              "women",
+              "men"
+            ],
+            "title": "Gender",
+            "default": "all"
+          },
+          "languages": {
+            "items": {
+              "type": "string",
+              "maxLength": 10,
+              "minLength": 2
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Languages"
+          },
+          "detailed": {
+            "items": {
+              "$ref": "#/components/schemas/DetailedTerm"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Detailed"
+          },
+          "custom_audiences": {
+            "items": {
+              "$ref": "#/components/schemas/CustomAudience"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Custom Audiences"
+          },
+          "advantage_audience": {
+            "type": "boolean",
+            "title": "Advantage Audience",
+            "default": false
+          },
+          "advantage_placements": {
+            "type": "boolean",
+            "title": "Advantage Placements",
+            "default": true
+          },
+          "placements": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "instagram_feed",
+                "instagram_stories",
+                "instagram_reels",
+                "instagram_explore",
+                "instagram_profile_feed",
+                "facebook_feed",
+                "facebook_stories",
+                "facebook_reels",
+                "facebook_marketplace",
+                "facebook_right_column",
+                "audience_network",
+                "messenger_inbox"
+              ]
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Placements"
+          },
+          "device_platforms": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "ios",
+                "android",
+                "desktop"
+              ]
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Device Platforms"
+          },
+          "wifi_only": {
+            "type": "boolean",
+            "title": "Wifi Only",
+            "default": false
+          },
+          "hours": {
+            "items": {
+              "type": "integer",
+              "maximum": 23.0,
+              "minimum": 0.0
+            },
+            "type": "array",
+            "maxItems": 24,
+            "title": "Hours"
+          },
+          "weekdays": {
+            "items": {
+              "type": "integer",
+              "maximum": 6.0,
+              "minimum": 0.0
+            },
+            "type": "array",
+            "maxItems": 7,
+            "title": "Weekdays"
+          },
+          "optimization_goal": {
+            "type": "string",
+            "enum": [
+              "link_clicks",
+              "landing_page_views",
+              "conversions",
+              "reach",
+              "impressions",
+              "leads"
+            ],
+            "title": "Optimization Goal",
+            "default": "link_clicks"
+          },
+          "bid_strategy": {
+            "type": "string",
+            "enum": [
+              "lowest_cost",
+              "cost_cap",
+              "bid_cap",
+              "roas_goal"
+            ],
+            "title": "Bid Strategy",
+            "default": "lowest_cost"
+          },
+          "bid_amount_eur": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Amount Eur"
+          },
+          "frequency_cap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrequencyCap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TargetingSpec",
+        "description": "Everything Ads Manager lets you set for an ad set, plus the advertiser's intent in plain language."
       },
       "ValidationError": {
         "properties": {

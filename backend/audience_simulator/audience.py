@@ -11,17 +11,28 @@ def stable_seed(*parts):
 
 
 def generate_population(brief: CampaignBrief):
+    from . import audience_spec
+
+    context = {
+        "beauty_skincare": "routine e familiarità skincare ipotetiche",
+        "pet_ecommerce": "animale e necessità ipotetici, non osservati",
+        "abbigliamento": "stile e necessità di taglia ipotetici",
+    }[brief.vertical]
+    marginals = audience_spec.load_marginals()
+    if marginals is not None and brief.country in marginals["countries"]:
+        spec = audience_spec.build_spec(marginals, brief.country)
+        shares = brief.age_shares if "age_shares" in brief.model_fields_set else None
+        return audience_spec.generate_profiles_v2(
+            brief.seed,
+            brief.vertical,
+            brief.brand,
+            spec,
+            brief.population_size,
+            shares,
+            f"{context}; età e acquisti online da dati Eurostat, tratti ipotetici",
+        )
     return generate_profiles(
-        brief.seed,
-        brief.vertical,
-        brief.brand,
-        brief.age_shares,
-        {
-            "beauty_skincare": "routine e familiarità skincare ipotetiche",
-            "pet_ecommerce": "animale e necessità ipotetici, non osservati",
-            "abbigliamento": "stile e necessità di taglia ipotetici",
-        }[brief.vertical],
-        brief.population_size,
+        brief.seed, brief.vertical, brief.brand, brief.age_shares, context, brief.population_size
     )
 
 

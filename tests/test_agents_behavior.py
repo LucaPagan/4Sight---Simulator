@@ -60,13 +60,35 @@ def test_client_validates_real_http_boundary():
     transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
-            json={"message": {"content": __import__("json").dumps(policy())}, "done": True, "eval_count": 30},
+            json={"response": __import__("json").dumps(policy()), "done": True, "eval_count": 30},
         )
     )
     client = OllamaClient(transport=transport)
     result = client.evaluate({"profile": {}, "creative": {"headline": "Kit skincare"}, "regime": "ordinary"})
     assert result["evaluation"]["interest"] == 2
     assert result["tokens"] == 30
+
+
+@pytest.mark.parametrize("method", ["evaluate", "generate"])
+def test_ollama_structured_calls_use_generate_with_thinking_disabled(method):
+    import json
+
+    import httpx
+
+    def respond(request):
+        assert request.url.path == "/api/generate"
+        body = json.loads(request.content)
+        assert body["think"] is False
+        assert body["system"] and body["prompt"] and body["format"]
+        return httpx.Response(200, json={"response": json.dumps(policy()), "done": True})
+
+    client = OllamaClient(transport=httpx.MockTransport(respond))
+    if method == "evaluate":
+        result = client.evaluate({"creative": {"headline": "Kit"}})
+        assert result["evaluation"]["interest"] == 2
+    else:
+        result = client.generate("Istruzioni", "Dati", AgentEvaluation.model_json_schema())
+        assert json.loads(result["raw"])["interest"] == 2
 
 
 def test_novel_friction_is_hypothesis_but_fabricated_evidence_is_rejected():
@@ -77,7 +99,7 @@ def test_novel_friction_is_hypothesis_but_fabricated_evidence_is_rejected():
     response = {**policy(), "frictions": ["scarcity_misinterpretation"]}
     client = OllamaClient(
         transport=httpx.MockTransport(
-            lambda req: httpx.Response(200, json={"message": {"content": json.dumps(response)}, "done": True})
+            lambda req: httpx.Response(200, json={"response": json.dumps(response), "done": True})
         )
     )
     assert client.evaluate({"creative": {"headline": "Kit"}})["evaluation"]["frictions"] == [

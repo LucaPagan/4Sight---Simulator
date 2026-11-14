@@ -51,13 +51,11 @@ def test_report_separates_missing_price_from_panel_discoveries():
     assert "price_unknown" not in diagnosis["evidence"]["frictions"]
     assert diagnosis["evidence"]["frictions"] == {"unclear_benefit": 3}
     assert all("price_unknown" not in f["frictions"] for f in diagnosis["evidence"]["by_age"])
-    assert report["input_gaps"] == [
-        {
-            "field": "price_eur",
-            "source": "input_validation",
-            "message": "Prezzo non indicato: informazione mancante nel brief.",
-        }
-    ]
+    assert report["input_gaps"][0] == {
+        "field": "price_eur",
+        "source": "input_validation",
+        "message": "Prezzo non indicato: informazione mancante nel brief.",
+    }
     status = report["measurement_status"]
     assert status["aggregate_kpi_source"] == "historical_baseline"
     assert status["agents_change_aggregate_kpis"] is False

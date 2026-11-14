@@ -3,7 +3,7 @@
 import {createContext, useCallback, useContext, useEffect, useMemo, useState} from "react";
 import type {ReactNode} from "react";
 import {api} from "@/lib/api";
-import type {Brief, Creative, Run, Runtime} from "@/lib/types";
+import type {Brief, Catalog, Creative, Run, Runtime, TargetingSpec} from "@/lib/types";
 import type {RuntimeChoice} from "@/components/runtime-panel";
 
 export type Asset = {asset_id: string; vertical: string; headline: string; testo_principale: string; descrizione_visual: string; call_to_action: string; leva: string; formato: string};
@@ -12,7 +12,7 @@ const NAMES_KEY = "audience-simulator:run-names";
 const WINNERS_KEY = "audience-simulator:run-winners";
 
 function blankCreative(id: string): Creative {
-  return {id, headline: "", primary_text: "", visual_description: "", cta: "Scopri di più", lever: "value", format: "immagine", claim_verified: false};
+  return {id, headline: "", primary_text: "", visual_description: "", cta: "Scopri di più", lever: "value", format: "immagine", claim_verified: false, offer: "", price_text: "", landing_page_summary: ""};
 }
 
 function today(offset = 0) {
@@ -48,6 +48,9 @@ type Ctx = {
   setBrief: (value: Brief | ((current: Brief) => Brief)) => void;
   patch: <K extends keyof Brief>(key: K, value: Brief[K]) => void;
   editCreative: (index: number, key: keyof Creative, value: string | boolean) => void;
+  patchTargeting: (change: Partial<TargetingSpec>) => void;
+  clearTargeting: () => void;
+  catalog: Catalog | null;
   addCreative: () => void;
   removeCreative: (index: number) => void;
   applyAsset: (asset: Asset, index: number) => void;
@@ -84,6 +87,7 @@ export function AppProvider({children}: {children: ReactNode}) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [runNames, setRunNames] = useState<Record<string, string>>({});
   const [runWinners, setRunWinners] = useState<Record<string, number>>({});
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [error, setError] = useState("");
 
   // Le date partono da oggi, ma solo sul client: evita differenze tra server e browser.
@@ -99,12 +103,15 @@ export function AppProvider({children}: {children: ReactNode}) {
   }, [runtimeChoice.provider, runtimeChoice.model]);
 
   useEffect(() => {refresh();}, [refresh]);
+  useEffect(() => {api<Catalog>("/targeting/catalog").then(setCatalog).catch(() => {});}, []);
   const reloadAssets = useCallback(() => {api<Asset[]>("/assets").then(setAssets).catch(() => {});}, []);
   useEffect(() => reloadAssets(), [reloadAssets]);
 
   const patch = useCallback(<K extends keyof Brief>(key: K, value: Brief[K]) => setBrief(b => ({...b, [key]: value})), []);
   const editCreative = useCallback((index: number, key: keyof Creative, value: string | boolean) =>
     setBrief(b => ({...b, creatives: b.creatives.map((c, i) => (i === index ? {...c, [key]: value} : c))})), []);
+  const patchTargeting = useCallback((change: Partial<TargetingSpec>) => setBrief(b => ({...b, targeting: {...(b.targeting ?? {}), ...change}})), []);
+  const clearTargeting = useCallback(() => setBrief(b => {const {targeting: _removed, ...rest} = b; return rest;}), []);
   const addCreative = useCallback(() =>
     setBrief(b => (b.creatives.length >= 4 ? b : {...b, creatives: [...b.creatives, blankCreative(`creative-${crypto.randomUUID().slice(0, 8)}`)]})), []);
   const removeCreative = useCallback((index: number) =>
@@ -131,9 +138,9 @@ export function AppProvider({children}: {children: ReactNode}) {
   }, []);
 
   const value = useMemo<Ctx>(() => ({
-    brief, setBrief, patch, editCreative, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets,
+    brief, setBrief, patch, editCreative, patchTargeting, clearTargeting, catalog, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets,
     runtimeChoice, setRuntimeChoice, runtime, runs, runNames, rememberRunName, runWinners, rememberRunWinner, refresh, error, setError
-  }), [runWinners, rememberRunWinner, brief, patch, editCreative, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets, runtimeChoice, runtime, runs, runNames, rememberRunName, refresh, error]);
+  }), [runWinners, rememberRunWinner, brief, patch, editCreative, patchTargeting, clearTargeting, catalog, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets, runtimeChoice, runtime, runs, runNames, rememberRunName, refresh, error]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

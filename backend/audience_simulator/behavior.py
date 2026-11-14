@@ -5,6 +5,7 @@ from scipy.special import expit, logit
 
 from .agents import calendar_regime, policy_diagnostics
 from .audience import stable_seed
+from .reaction_quality import assess_panel
 from .schemas import AGES
 
 
@@ -72,9 +73,11 @@ def policy_signals(brief, profiles, policy_map, plan, rows):
                     continue
                 e = lookup[(profile["agent_id"], row["ad_id"], regime)]
                 scores.append((e["interest"] + e["credibility"] - e["friction"] - 2) / 8)
-            effects.append(float(np.mean(scores)))
-        effects = np.array(effects)
-        result.append((effects - effects.mean()).tolist())
+            effects.append(float(np.mean(scores)) if scores else None)
+        reached = np.array([e is not None for e in effects])
+        values = np.array([0.0 if e is None else e for e in effects])
+        # Bands the targeting does not reach carry no signal; the others are centred among themselves.
+        result.append(np.where(reached, values - values[reached].mean(), 0.0).tolist())
     return result
 
 
@@ -97,6 +100,8 @@ def simulate_panel(brief, profiles, policy_map, plan, predictions, replicates=1)
                 regime = calendar_regime(row["date"])
                 for band in AGES:
                     cohort = [p for p in profiles if p["age_band"] == band]
+                    if not cohort:  # band not reached by the targeting
+                        continue
                     evaluations = [lookup[(p["agent_id"], creative.id, regime)] for p in cohort]
                     logits = np.array(
                         [raw_logits(p, e, state[p["agent_id"]], brief) for p, e in zip(cohort, evaluations)]
@@ -143,7 +148,7 @@ def simulate_panel(brief, profiles, policy_map, plan, predictions, replicates=1)
                             "exposure_context": {
                                 "placement": brief.placement,
                                 "placement_source": "scenario_assumption",
-                                "device": "mobile",
+                                "device": brief.device,
                                 "task": brief.browsing_task,
                                 "calendar_regime": regime,
                                 "state_before": dict(state[aid]),
@@ -174,6 +179,8 @@ def simulate_panel(brief, profiles, policy_map, plan, predictions, replicates=1)
     for creative in brief.creatives:
         for band in AGES:
             ids = {p["agent_id"] for p in profiles if p["age_band"] == band}
+            if not ids:
+                continue
             values = [e for (aid, cid, _), e in lookup.items() if aid in ids and cid == creative.id]
             findings.append(
                 {
@@ -197,6 +204,13 @@ def simulate_panel(brief, profiles, policy_map, plan, predictions, replicates=1)
             [
                 {"agent_id": aid, "creative_id": cid, "regime": regime, "evaluation": evaluation}
                 for (aid, cid, regime), evaluation in lookup.items()
+            ]
+        ),
+        "reaction_quality": assess_panel(
+            [
+                {"key": p["key"], "input": p["input"], "evaluation": policy_map[p["key"]]}
+                for p in plan
+                if p["key"] in policy_map
             ]
         ),
         "trace_limit": 10000,

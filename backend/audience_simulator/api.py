@@ -17,14 +17,18 @@ from .reporting import csv_export
 from .schemas import (
     CampaignBrief,
     ComparisonRequest,
+    CounterfactualRequest,
     Creative,
     ExportRequest,
     PreflightRequest,
+    ReactionRequest,
     RuntimeCredentials,
     RuntimeSelection,
     SimulationRequest,
+    TargetingAnalyzeRequest,
 )
 from .service import SimulationService
+from .targeting import analyze_targeting
 
 
 def create_app(service=None):
@@ -194,6 +198,56 @@ def create_app(service=None):
     def campaign(brief: CampaignBrief):
         return svc.create_scenario(brief.model_dump(mode="json"))
 
+    @app.post("/api/v1/scenarios/{scenario_id}/personas")
+    def write_personas(scenario_id: str, request: RuntimeSelection):
+        """Write (or reuse from cache) a persona card for every person in the scenario's targeted panel.
+
+        Synchronous: with a hosted model this takes minutes. Progress is cached per person, so a quota error can be resumed."""
+        return svc.write_personas(scenario_id, provider=request.provider, model=request.model)
+
+    @app.post("/api/v1/scenarios/{scenario_id}/reactions")
+    def run_reactions(scenario_id: str, request: ReactionRequest):
+        """Persona reactions to the ad as seen (``agent-reaction-v8``). Synchronous; ``limit`` allows a small smoke test."""
+        return svc.run_reactions(
+            scenario_id,
+            provider=request.provider,
+            model=request.model,
+            slots=request.slots,
+            limit=request.limit,
+        )
+
+    @app.post("/api/v1/scenarios/{scenario_id}/quality/counterfactual")
+    def counterfactual(scenario_id: str, request: CounterfactualRequest):
+        """Metamorphic tests of the reaction prompt: does the decision move when one fact changes? Synchronous."""
+        return svc.counterfactuals(
+            scenario_id, provider=request.provider, model=request.model, n_pairs=request.n_pairs
+        )
+
+    @app.get("/api/v1/simulations/{run_id}/rubric")
+    def rubric(run_id: str, n: int = 60, seed: int = 0):
+        """Blind rubric CSV for human raters and, apart, the key that maps blind ids back to exposures."""
+        if not 1 <= n <= 500:
+            raise HTTPException(422, "n deve essere tra 1 e 500")
+        return svc.rubric(run_id, n, seed)
+
+    @app.get("/api/v1/targeting/catalog")
+    def targeting_catalog():
+        """What the targeting form can offer: placements, detailed terms and the person attributes constraints can use."""
+        from .meta_catalog import DETAILED_TERMS, PERSONA_ATTRIBUTES, PLACEMENTS
+
+        return {
+            "placements": [{"id": k, **v} for k, v in PLACEMENTS.items()],
+            "terms": [
+                {"id": k, "kind": v["kind"], "label": v["label"], "modelled": bool(v["match"])}
+                for k, v in DETAILED_TERMS.items()
+            ],
+            "attributes": [{"id": k, **v} for k, v in PERSONA_ATTRIBUTES.items()],
+        }
+
+    @app.post("/api/v1/targeting/analyze")
+    def targeting_analyze(request: TargetingAnalyzeRequest):
+        return analyze_targeting(request).model_dump(mode="json")
+
     @app.get("/api/v1/assets")
     def assets():
         kit = svc.ensure_kit()
@@ -226,13 +280,20 @@ def create_app(service=None):
 
     @app.post("/api/v1/simulations", status_code=202)
     def simulate(request: SimulationRequest):
-        svc.repo.get("scenarios", request.scenario_id)
+        scenario = svc.repo.get("scenarios", request.scenario_id)
+        if request.mode == "agent_native" and not scenario["brief"].get("targeting"):
+            raise HTTPException(422, "La modalità agent_native richiede il targeting nel brief")
         selected = svc.client(request.provider, request.model)
         try:
             run = svc.repo.create_run(
                 request.scenario_id,
                 request.idempotency_key,
-                {"provider": request.provider, "model": selected.model},
+                {
+                    "provider": request.provider,
+                    "model": selected.model,
+                    "mode": request.mode,
+                    "slots": request.slots,
+                },
             )
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc

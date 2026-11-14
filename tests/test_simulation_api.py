@@ -33,21 +33,19 @@ def fake_ollama(request):
     return httpx.Response(
         200,
         json={
-            "message": {
-                "content": json.dumps(
-                    {
-                        "clarity": 3,
-                        "interest": 2,
-                        "credibility": 2,
-                        "friction": 2,
-                        "conditional_action": "consider_click",
-                        "frictions": ["price_unknown"],
-                        "evidence": ["creative.headline"],
-                        "unknowns": ["Prezzo"],
-                        "conditional_reaction": "Potrei guardare il kit se ne avessi bisogno.",
-                    }
-                )
-            },
+            "response": json.dumps(
+                {
+                    "clarity": 3,
+                    "interest": 2,
+                    "credibility": 2,
+                    "friction": 2,
+                    "conditional_action": "consider_click",
+                    "frictions": ["price_unknown"],
+                    "evidence": ["creative.headline"],
+                    "unknowns": ["Prezzo"],
+                    "conditional_reaction": "Potrei guardare il kit se ne avessi bisogno.",
+                }
+            ),
             "done": True,
             "eval_count": 40,
         },

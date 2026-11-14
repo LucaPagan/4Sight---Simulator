@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from .contracts import AgePrediction, ConsumerProfile, Prediction, SimulationRun
-from .schemas import AgentEvaluation, CampaignBrief, RuntimeSelection
+from .schemas import AgentEvaluation, CampaignBrief, RuntimeSelection, TargetingReport, TargetingSpec
 
 
 def typescript(node):
@@ -49,6 +49,8 @@ def generate_contracts(root: Path = Path(".")) -> None:
         Prediction,
         SimulationRun,
         RuntimeSelection,
+        TargetingSpec,
+        TargetingReport,
     ]
     schemas = {}
     for model in models:
