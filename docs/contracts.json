@@ -609,6 +609,23 @@
         ],
         "default": null,
         "title": "Heartbeat At"
+      },
+      "provider": {
+        "default": "ollama",
+        "title": "Provider",
+        "type": "string"
+      },
+      "requested_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Requested Model"
       }
     },
     "required": [
@@ -622,6 +639,36 @@
       "required_policies"
     ],
     "title": "SimulationRun",
+    "type": "object"
+  },
+  "RuntimeSelection": {
+    "additionalProperties": false,
+    "properties": {
+      "provider": {
+        "default": "ollama",
+        "enum": [
+          "ollama",
+          "gemini",
+          "cloudflare"
+        ],
+        "title": "Provider",
+        "type": "string"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "maxLength": 100,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Model"
+      }
+    },
+    "title": "RuntimeSelection",
     "type": "object"
   }
 }

@@ -1,16 +1,29 @@
 import json
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
+from .cloud import GEMINI_MODELS, save_credentials
+from .cloudflare import CLOUDFLARE_MODELS
 from .config import settings
 from .contracts import SimulationResult, SimulationRun
 from .datasets import ASSETS, FILES
 from .evidence import ASSUMPTIONS, EVIDENCE
 from .reporting import csv_export
-from .schemas import CampaignBrief, ComparisonRequest, Creative, ExportRequest, SimulationRequest
+from .schemas import (
+    CampaignBrief,
+    ComparisonRequest,
+    Creative,
+    ExportRequest,
+    PreflightRequest,
+    RuntimeCredentials,
+    RuntimeSelection,
+    SimulationRequest,
+)
 from .service import SimulationService
 
 
@@ -45,13 +58,96 @@ def create_app(service=None):
     async def invalid(request, exc):
         return JSONResponse({"detail": str(exc)[:500]}, status_code=422)
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request, exc):
+        return JSONResponse(
+            {"detail": [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]},
+            status_code=422,
+        )
+
     @app.get("/api/v1/health")
     def health():
         return {"status": "ok", "local_only": True}
 
     @app.get("/api/v1/runtime/status")
-    def runtime():
-        return svc.client().status()
+    def runtime(provider: str = "ollama", model: str | None = None):
+        return svc.client(provider, model).status()
+
+    @app.get("/api/v1/runtime/config")
+    def runtime_config(provider: str = "gemini"):
+        credentials = svc.cloud_credentials(provider)
+        models = CLOUDFLARE_MODELS if provider == "cloudflare" else GEMINI_MODELS
+        return {
+            "provider": provider,
+            "configured": bool(credentials["api_key"]),
+            "gemini_configured": bool(credentials["api_key"]) if provider == "gemini" else False,
+            "account_id": credentials.get("account_id", ""),
+            "free_tier_confirmed": credentials["free_tier_confirmed"],
+            "requests_per_minute": credentials.get("requests_per_minute", 10),
+            "models": [{"id": key, "label": label} for key, label in models.items()],
+        }
+
+    @app.post("/api/v1/runtime/config")
+    def configure_runtime(request: RuntimeCredentials):
+        key = (
+            request.api_key.get_secret_value()
+            if request.api_key is not None
+            else svc.cloud_credentials(request.provider)["api_key"]
+        )
+        save_credentials(
+            svc.cfg.artifact_dir,
+            key,
+            request.free_tier_confirmed,
+            request.requests_per_minute,
+            request.provider,
+            request.account_id or svc.cloud_credentials(request.provider).get("account_id", ""),
+        )
+        return runtime_config(request.provider)
+
+    @app.post("/api/v1/runtime/test")
+    def test_runtime(request: RuntimeSelection):
+        from .agents import evaluation_plan
+        from .audience import generate_population
+
+        client = svc.client(request.provider, request.model)
+        state = client.status()
+        if not state["ready"]:
+            raise HTTPException(409, state["error"])
+        brief = CampaignBrief(
+            name="Prova runtime",
+            brand="Brand sintetico",
+            product_description="Kit routine di prova, nessun dato riservato",
+            vertical="beauty_skincare",
+            date_from=date(2026, 11, 16),
+            date_to=date(2026, 11, 16),
+            creatives=[
+                Creative(
+                    id="probe",
+                    headline="Scopri una routine semplice",
+                    primary_text="Un kit di prova per la routine quotidiana.",
+                )
+            ],
+        )
+        item = evaluation_plan(brief, generate_population(brief)[:1], state["digest"], client.prompt_version)[
+            0
+        ]
+        response = client.evaluate(item["input"])
+        svc.repo.create(
+            "llm_benchmark_runs",
+            {
+                "kind": "single_probe",
+                "provider": request.provider,
+                "model": client.model,
+                "seconds": response["seconds"],
+                "prompt_version": client.prompt_version,
+                "qualified": False,
+            },
+        )
+        return {
+            **response,
+            "qualified": False,
+            "warning": "Prova tecnica singola con dati sintetici: non dimostra accuratezza delle simulazioni.",
+        }
 
     @app.get("/api/v1/evidence")
     def evidence():
@@ -125,13 +221,21 @@ def create_app(service=None):
         return svc.repo.get("populations", population_id)
 
     @app.post("/api/v1/simulations/preflight")
-    def preflight(request: dict):
-        return svc.preflight(request["scenario_id"])
+    def preflight(request: PreflightRequest):
+        return svc.preflight(**request.model_dump())
 
     @app.post("/api/v1/simulations", status_code=202)
     def simulate(request: SimulationRequest):
         svc.repo.get("scenarios", request.scenario_id)
-        run = svc.repo.create_run(request.scenario_id, request.idempotency_key)
+        selected = svc.client(request.provider, request.model)
+        try:
+            run = svc.repo.create_run(
+                request.scenario_id,
+                request.idempotency_key,
+                {"provider": request.provider, "model": selected.model},
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
         if run["status"] == "queued":
             svc.dispatch(run["id"])
         return run
@@ -164,7 +268,7 @@ def create_app(service=None):
                 heartbeat = heartbeat.replace(tzinfo=UTC)
             if (datetime.now(UTC) - heartbeat).total_seconds() < 600:
                 raise HTTPException(409, "Simulazione già in corso")
-        runtime = svc.client().status()
+        runtime = svc.client(run.get("provider", "ollama"), run.get("requested_model")).status()
         if run.get("model_digest") and runtime.get("digest") and run["model_digest"] != runtime["digest"]:
             raise HTTPException(409, "Modello cambiato: crea una nuova run")
         svc.repo.update_run(run_id, status="queued", error=None)

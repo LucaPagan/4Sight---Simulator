@@ -72,7 +72,9 @@ def run_ablation(service, client=None):
         )
         profiles = generate_population(brief)
         neutral = {"agent_id": "no-persona", "category_context": brief.product_description}
-        work = evaluation_plan(brief, [neutral, *profiles], runtime["digest"])
+        work = evaluation_plan(
+            brief, [neutral, *profiles], runtime["digest"], getattr(client, "prompt_version", PROMPT_VERSION)
+        )
         evaluations = []
         for item in work:
             cached = service.repo.get_policy(item["key"])
@@ -135,7 +137,8 @@ def run_ablation(service, client=None):
         "status": "complete",
         "dataset_hash": service.import_dataset(service.cfg.data_dir)["id"],
         "model_digest": runtime["digest"],
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": getattr(client, "prompt_version", PROMPT_VERSION),
+        "provider": getattr(client, "provider", "ollama"),
         "training_cutoff": "2026-11-01",
         "validation_rows": len(validation),
         "metrics": compare_ablation(validation, predictions),

@@ -43,6 +43,13 @@ services:
       AUDIENCE_QUEUE_MODE: rq
       AUDIENCE_OLLAMA_URL: http://host.docker.internal:11434
       AUDIENCE_OLLAMA_MODEL: ${AUDIENCE_OLLAMA_MODEL:-qwen3.5:9b}
+      AUDIENCE_GEMINI_API_KEY: "${AUDIENCE_GEMINI_API_KEY:-}"
+      AUDIENCE_GEMINI_FREE_TIER_CONFIRMED: ${AUDIENCE_GEMINI_FREE_TIER_CONFIRMED:-false}
+      AUDIENCE_GEMINI_REQUESTS_PER_MINUTE: ${AUDIENCE_GEMINI_REQUESTS_PER_MINUTE:-10}
+      AUDIENCE_CLOUDFLARE_API_TOKEN: "${AUDIENCE_CLOUDFLARE_API_TOKEN:-}"
+      AUDIENCE_CLOUDFLARE_ACCOUNT_ID: "${AUDIENCE_CLOUDFLARE_ACCOUNT_ID:-}"
+      AUDIENCE_CLOUDFLARE_FREE_TIER_CONFIRMED: ${AUDIENCE_CLOUDFLARE_FREE_TIER_CONFIRMED:-false}
+      AUDIENCE_CLOUDFLARE_REQUESTS_PER_MINUTE: ${AUDIENCE_CLOUDFLARE_REQUESTS_PER_MINUTE:-30}
       AUDIENCE_S3_ENDPOINT: http://minio:9000
       AUDIENCE_S3_BUCKET: audience
       AUDIENCE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-audience-local}
@@ -68,6 +75,15 @@ services:
     environment:
       API_BASE_URL: http://api:8000
     ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+  cloud-worker:
+    build: .
+    command: ["python", "-m", "audience_simulator.worker"]
+    environment:
+      <<: *backend-env
+      AUDIENCE_WORKER_QUEUE: cloud
+    volumes: ["./data:/app/data:ro", "./artifacts:/app/artifacts"]
     depends_on:
       api: {condition: service_healthy}
 volumes:

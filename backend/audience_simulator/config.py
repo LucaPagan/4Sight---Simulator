@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +11,15 @@ class Settings(BaseSettings):
     artifact_dir: Path = Path("artifacts")
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.5:9b"
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_free_tier_confirmed: bool = False
+    gemini_requests_per_minute: int = Field(default=10, ge=1, le=60)
+    cloudflare_api_token: SecretStr = SecretStr("")
+    cloudflare_account_id: str = ""
+    cloudflare_free_tier_confirmed: bool = False
+    cloudflare_requests_per_minute: int = Field(default=30, ge=1, le=60)
     queue_mode: str = "local"
+    worker_queue: str = "default"
     redis_url: str = "redis://localhost:6379/0"
     s3_endpoint: str | None = None
     s3_bucket: str = "audience"

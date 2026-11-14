@@ -59,6 +59,8 @@ class SimulationRun(ResponseModel):
     created_at: str | None = None
     model_name: str | None = None
     heartbeat_at: str | None = None
+    provider: str = "ollama"
+    requested_model: str | None = None
 
 
 class SimulationResult(ResponseModel):

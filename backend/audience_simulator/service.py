@@ -8,9 +8,11 @@ import httpx
 import joblib
 import pandas as pd
 
-from .agents import PROMPT_VERSION, OllamaClient, evaluation_plan
+from .agents import OllamaClient, evaluation_plan
 from .audience import age_predictions, generate_population
 from .behavior import policy_signals, simulate_panel
+from .cloud import CloudQuotaError, CloudRuntimeError, GeminiClient, credentials_path, read_credentials
+from .cloudflare import CloudflareClient
 from .config import Settings
 from .datasets import audit_dataset, load_dataset
 from .evidence import ASSUMPTIONS, EVIDENCE
@@ -26,6 +28,7 @@ class SimulationService:
         self.repo = Repository(cfg.database_url)
         self.store = ArtifactStore(cfg.artifact_dir, cfg if cfg.s3_endpoint else None)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audience")
+        self.cloud_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audience-cloud")
         self.lock = threading.RLock()
         self.models = None
         self.kit = None
@@ -38,8 +41,45 @@ class SimulationService:
             except KeyError:
                 pass
 
-    def client(self):
-        return OllamaClient(self.cfg.ollama_url, self.cfg.ollama_model)
+    def cloud_credentials(self, provider="gemini"):
+        if credentials_path(self.cfg.artifact_dir, provider).exists():
+            return read_credentials(self.cfg.artifact_dir, provider)
+        if provider == "cloudflare":
+            return {
+                "api_key": self.cfg.cloudflare_api_token.get_secret_value(),
+                "account_id": self.cfg.cloudflare_account_id,
+                "free_tier_confirmed": self.cfg.cloudflare_free_tier_confirmed,
+                "requests_per_minute": self.cfg.cloudflare_requests_per_minute,
+            }
+        return {
+            "api_key": self.cfg.gemini_api_key.get_secret_value(),
+            "free_tier_confirmed": self.cfg.gemini_free_tier_confirmed,
+            "requests_per_minute": self.cfg.gemini_requests_per_minute,
+        }
+
+    def client(self, provider="ollama", model=None):
+        if provider == "cloudflare":
+            credentials = self.cloud_credentials(provider)
+            return CloudflareClient(
+                credentials["api_key"],
+                credentials.get("account_id", ""),
+                model or "@cf/google/gemma-4-26b-a4b-it",
+                credentials["free_tier_confirmed"],
+                credentials.get("requests_per_minute", 30),
+                rate_limit_path=self.store.path(".cloudflare-rate-limit"),
+            )
+        if provider == "gemini":
+            credentials = self.cloud_credentials()
+            return GeminiClient(
+                credentials["api_key"],
+                model or "gemini-3.5-flash-lite",
+                credentials["free_tier_confirmed"],
+                credentials.get("requests_per_minute", 10),
+                rate_limit_path=self.store.path(".gemini-rate-limit"),
+            )
+        if provider != "ollama":
+            raise ValueError("Provider non consentito")
+        return OllamaClient(self.cfg.ollama_url, model or self.cfg.ollama_model)
 
     def import_dataset(self, root, activate=False):
         root = Path(root).resolve()
@@ -214,12 +254,13 @@ class SimulationService:
         self.repo.replace("scenarios", scenario["id"], scenario)
         return scenario
 
-    def preflight(self, scenario_id, client=None):
+    def preflight(self, scenario_id, client=None, provider="ollama", model=None):
         scenario = self.repo.get("scenarios", scenario_id)
         brief = CampaignBrief.model_validate(scenario["brief"])
         profiles = self.repo.get("populations", scenario["population_id"])["profiles"]
-        runtime = (client or self.client()).status()
-        plan = evaluation_plan(brief, profiles, runtime["digest"] or "pending-runtime")
+        client = client or self.client(provider, model)
+        runtime = client.status()
+        plan = evaluation_plan(brief, profiles, runtime["digest"] or "pending-runtime", client.prompt_version)
         cached = sum(bool(self.repo.get_policy(p["key"])) for p in plan) if runtime["ready"] else 0
         import numpy as np
 
@@ -227,11 +268,13 @@ class SimulationService:
             float(p["metrics"]["seconds"])
             for p in self.repo.list("agent_evaluations", 200)
             if p.get("digest") == runtime.get("digest")
-            and p.get("input", {}).get("prompt_version") == PROMPT_VERSION
+            and p.get("input", {}).get("prompt_version") == client.prompt_version
             and p.get("metrics", {}).get("seconds", 0) > 0
         ]
         timings = [t for t in timings if np.isfinite(t)]
         estimate = float(np.median(timings)) * (len(plan) - cached) if len(timings) >= 3 else None
+        if estimate is not None and provider in {"gemini", "cloudflare"}:
+            estimate = max(estimate, (len(plan) - cached) * client.interval)
         return {
             "runtime": runtime,
             "required_policies": len(plan),
@@ -245,21 +288,38 @@ class SimulationService:
             if estimate is not None
             else "Misure locali insufficienti per stimare la durata.",
             "population_size": 120,
-            "model": self.cfg.ollama_model,
+            "model": client.model,
+            "provider": provider,
+            "daily_free_neurons": runtime.get("daily_free_neurons"),
         }
 
     def dispatch(self, run_id):
         if self.cfg.queue_mode == "manual":
             return
+        run = self.repo.get("simulation_runs", run_id)
+        if run.get("provider", "ollama") == "ollama" and any(
+            r["id"] != run_id and r["status"] == "running" and r.get("provider", "ollama") == "ollama"
+            for r in self.repo.list("simulation_runs", 1000)
+        ):
+            self.repo.update_run(
+                run_id,
+                status="waiting_for_capacity",
+                error="Un’altra simulazione locale è in corso. Riprendi dopo il completamento oppure crea un test con Gemini.",
+            )
+            return
         if self.cfg.queue_mode == "rq":
             from redis import Redis
             from rq import Queue
 
-            Queue(connection=Redis.from_url(self.cfg.redis_url)).enqueue(
-                "audience_simulator.worker.run", run_id, job_timeout=86400, job_id=run_id
-            )
+            Queue(
+                "cloud" if run.get("provider") in {"gemini", "cloudflare"} else "default",
+                connection=Redis.from_url(self.cfg.redis_url),
+            ).enqueue("audience_simulator.worker.run", run_id, job_timeout=86400, job_id=run_id)
         else:
-            self.executor.submit(self.execute_run, run_id)
+            executor = (
+                self.cloud_executor if run.get("provider") in {"gemini", "cloudflare"} else self.executor
+            )
+            executor.submit(self.execute_run, run_id)
 
     def rows_for_brief(self, brief):
         kit = self.ensure_kit()
@@ -372,6 +432,7 @@ class SimulationService:
                 return scoped._execute_run(run_id, client)
             finally:
                 scoped.executor.shutdown(wait=False)
+                scoped.cloud_executor.shutdown(wait=False)
                 scoped.repo.engine.dispose()
         return self._execute_run(run_id, client)
 
@@ -381,7 +442,7 @@ class SimulationService:
             return
         if not self.repo.claim_run(run_id):
             return
-        client = client or self.client()
+        client = client or self.client(run.get("provider", "ollama"), run.get("requested_model"))
         scenario = self.repo.get("scenarios", run["scenario_id"])
         brief = CampaignBrief.model_validate(scenario["brief"])
         profiles = self.repo.get("populations", scenario["population_id"])["profiles"]
@@ -418,11 +479,11 @@ class SimulationService:
                     phase="agents",
                 )
                 return
-            plan = evaluation_plan(brief, profiles, runtime["digest"])
+            plan = evaluation_plan(brief, profiles, runtime["digest"], client.prompt_version)
             self.repo.update_run(
                 run_id,
                 model_digest=runtime["digest"],
-                model_name=self.cfg.ollama_model,
+                model_name=client.model,
                 required_policies=len(plan),
                 completion_status="partial",
                 phase="agents",
@@ -463,6 +524,23 @@ class SimulationService:
                         policies[item["key"]] = response["evaluation"]
                         last_error = None
                         break
+                    except CloudQuotaError as exc:
+                        self.repo.update_run(
+                            run_id,
+                            status="waiting_for_capacity",
+                            error=str(exc),
+                            retry_after_seconds=exc.retry_after_seconds,
+                            completed_policies=len(policies),
+                        )
+                        return
+                    except CloudRuntimeError as exc:
+                        self.repo.update_run(
+                            run_id,
+                            status="waiting_for_runtime",
+                            error=str(exc),
+                            completed_policies=len(policies),
+                        )
+                        return
                     except httpx.ConnectError:
                         self.repo.update_run(
                             run_id,
@@ -510,9 +588,11 @@ class SimulationService:
                 "completion_status": "complete",
                 "quantitative_source": "historical_baseline_with_age_reconciliation",
                 "model": {
-                    "name": self.cfg.ollama_model,
+                    "name": client.model,
                     "digest": runtime["digest"],
-                    "prompt_version": PROMPT_VERSION,
+                    "provider": getattr(client, "provider", "ollama"),
+                    "digest_is_weights_hash": runtime.get("digest_is_weights_hash", True),
+                    "prompt_version": client.prompt_version,
                 },
                 "provenance": {
                     "dataset_id": scenario.get("dataset_id"),

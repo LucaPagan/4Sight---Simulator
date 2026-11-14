@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 AGES = ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
 VERTICALS = ["beauty_skincare", "pet_ecommerce", "abbigliamento"]
@@ -74,7 +74,31 @@ class AgentEvaluation(StrictModel):
     conditional_reaction: str = Field(min_length=1, max_length=400)
 
 
-class SimulationRequest(StrictModel):
+class RuntimeSelection(StrictModel):
+    provider: Literal["ollama", "gemini", "cloudflare"] = "ollama"
+    model: str | None = Field(default=None, max_length=100)
+
+
+class PreflightRequest(RuntimeSelection):
+    scenario_id: str
+
+
+class RuntimeCredentials(StrictModel):
+    provider: Literal["gemini", "cloudflare"] = "gemini"
+    api_key: SecretStr | None = None
+    account_id: str | None = Field(default=None, max_length=32, pattern=r"^[a-fA-F0-9]{32}$")
+    free_tier_confirmed: bool
+    requests_per_minute: int = Field(default=10, ge=1, le=60)
+
+    @model_validator(mode="after")
+    def key_format(self):
+        key = self.api_key.get_secret_value() if self.api_key is not None else ""
+        if key and (not 20 <= len(key) <= 256 or any(c.isspace() for c in key)):
+            raise ValueError("Formato della chiave API non valido")
+        return self
+
+
+class SimulationRequest(RuntimeSelection):
     scenario_id: str
     idempotency_key: str = Field(min_length=1, max_length=120)
 

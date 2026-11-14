@@ -3,13 +3,13 @@ from datetime import UTC, datetime
 
 import numpy as np
 
-from .agents import PROMPT_VERSION, OllamaClient, evaluation_plan, policy_key
+from .agents import evaluation_plan, policy_key
 from .audience import generate_population
 from .schemas import CampaignBrief, Creative
 
 
-def benchmark_model(service, model, limit=96):
-    client = OllamaClient(service.cfg.ollama_url, model)
+def benchmark_model(service, model, limit=96, provider="ollama"):
+    client = service.client(provider, model)
     runtime = client.status()
     if not runtime["ready"]:
         raise ValueError(f"Modello non pronto: {model}")
@@ -39,7 +39,7 @@ def benchmark_model(service, model, limit=96):
         )
         profiles = generate_population(brief)
         selected = [profiles[i] for i in [0, 20, 40, 60, 80, 100, 1, 21, 81, 101]]
-        cases.extend(evaluation_plan(brief, selected, runtime["digest"]))
+        cases.extend(evaluation_plan(brief, selected, runtime["digest"], client.prompt_version))
     for i in range(12):
         item = json.loads(json.dumps(cases[i]))
         item["input"]["creative"]["primary_text"] += (
@@ -85,7 +85,7 @@ def benchmark_model(service, model, limit=96):
         if (index + 1) % 12 == 0:
             print(f"{model}: {index + 1}/{min(limit, 96)}", flush=True)
         service.store.write_json(
-            f"benchmarks/{model.replace(':', '-')}.in-progress.json", {"results": results}
+            f"benchmarks/{model.replace(':', '-').replace('/', '-')}.in-progress.json", {"results": results}
         )
     first_valid = sum(r["response"] is not None and r["attempts"] == 1 for r in results)
     valid = sum(r["response"] is not None for r in results)
@@ -93,7 +93,8 @@ def benchmark_model(service, model, limit=96):
     report = {
         "model": model,
         "digest": runtime["digest"],
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": client.prompt_version,
+        "provider": provider,
         "timestamp": datetime.now(UTC).isoformat(),
         "cases": len(results),
         "valid_first_attempt": first_valid,
@@ -106,6 +107,6 @@ def benchmark_model(service, model, limit=96):
         "results": results,
         "warning": "Rubrica umana cieca e qualità comportamentale non sostituite dalla validità JSON. Ripetizioni a temperatura zero misurano stabilità, non diversità umana.",
     }
-    service.store.write_json(f"benchmarks/{model.replace(':', '-')}.json", report)
+    service.store.write_json(f"benchmarks/{model.replace(':', '-').replace('/', '-')}.json", report)
     service.repo.create("llm_benchmark_runs", {k: v for k, v in report.items() if k != "results"})
     return {k: v for k, v in report.items() if k != "results"}

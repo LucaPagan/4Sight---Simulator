@@ -1,6 +1,6 @@
 # Audience Simulator
 
-Un laboratorio locale per progettare e testare campagne Meta: inserisci prodotto, creatività, pubblico, periodo e budget; 120 consumatori sintetici valutano individualmente gli annunci tramite un LLM locale. Il report distingue reazioni del panel, CTR/CPM calibrati sul kit e ipotesi demografiche.
+Un laboratorio locale per progettare e testare campagne Meta: inserisci prodotto, creatività, pubblico, periodo e budget; 120 consumatori sintetici valutano individualmente gli annunci tramite Ollama locale oppure un modello cloud selezionato. Il report distingue reazioni del panel, CTR/CPM calibrati sul kit e ipotesi demografiche.
 
 **Non è una validazione di esseri umani reali.** I dati Wevion sono simulati, non contengono label per età e non permettono di misurare accuratezza demografica. Nessuna campagna o spesa viene eseguita su Meta.
 
@@ -54,6 +54,28 @@ Candidati Apache 2.0: `qwen3.5:9b`, `qwen3.5:4b`, `ministral-3:8b`. Un unico mod
 Il benchmark produce 96 casi, retry, latenza e risposte in `artifacts/benchmarks/`. La validità JSON non sostituisce la rubrica di grounding, italiano, profilo, unknown e frizioni. Il report non dichiara qualificato automaticamente un modello senza revisione dei contenuti. Cambiare il modello con `AUDIENCE_OLLAMA_MODEL`; il digest fa parte della cache e una run non mescola digest diversi.
 
 Ogni agente valuta ogni creatività per ciascun regime rilevante, non ogni singola impression. Con 120 agenti e due creatività: 240 valutazioni per regime. Memoria e contesto cambiano a ogni esposizione nel motore probabilistico; le policy sono reazioni condizionali a notare l'annuncio. Un'esposizione ignorata non produce un monologo.
+
+## Switch locale / cloud
+
+Apri **Modelli e cloud** nell’app. Per ogni nuovo test scegli Ollama, Google Gemini o Cloudflare Workers AI. Provider e modello sono fissati per run; un cambio di selettore non modifica una simulazione già avviata. Per confrontare due provider avvia due run dello stesso brief. La cache rimane separata e ogni agente viene valutato individualmente.
+
+**Google AI Studio:** inserisci la chiave API, conferma un progetto Free Tier senza billing attivo, salva e premi **Prova il modello selezionato**. Modelli: Gemini3.5Flash-Lite e Gemini3.8Flash. Le quote effettive sono quelle del tuo progetto in [AI Studio](https://aistudio.google.com/rate-limit); l’app non può ricavare il tier di fatturazione dalla chiave.
+
+**Cloudflare Workers AI:** crea un account Workers Free; da Workers AI → Use REST API copia Account ID e crea il token dal template (permessi Workers AI Read+Edit). Inseriscili nell’app e conferma Workers Free. Sono disponibili Gemma4-26B-A4B e GLM4.7Flash. Il piano Free offre **10.000 Neurons/giorno**, con reset00:00UTC e stop oltre quota; il piano Paid può fatturare gli extra. Non è un’offerta illimitata o garantita per sempre. La prova mostra una stima dei Neurons dai token quando disponibili; non è il saldo ufficiale dell’account. [Prezzi e allocazione ufficiali](https://developers.cloudflare.com/workers-ai/platform/pricing/).
+
+I segreti restano in file privati0600 sotto artifacts, separati per provider, e non entrano in SQLite, report, prompt, S3 o repository. In cloud, il brief e i profili sintetici sono trasmessi al provider scelto. Nessun upgrade, modello a pagamento, cambio di provider o rotazione automatica di account. Se la quota termina la run conserva le policy e si può riprendere. Il limite richieste/minuto è condiviso fra panel e prove anche fra processi del progetto.
+
+Il cloud ha un executor/coda RQ separato: un lungo test Ollama non lo blocca. Il test singolo usa dati sintetici e misura soltanto latenza e validità JSON; «più veloce/più forte» richiede un confronto reale. La disponibilità gratuita è stata verificata nelle fonti il14/11/2026; cambia con le condizioni dei provider.
+
+```sh
+.venv/bin/python -m audience_simulator.cli benchmark --provider gemini --model gemini-3.5-flash-lite
+.venv/bin/python -m audience_simulator.cli benchmark --provider cloudflare --model @cf/google/gemma-4-26b-a4b-it
+.venv/bin/python -m audience_simulator.cli simulate brief.json --provider cloudflare
+.venv/bin/python -m audience_simulator.cli ablation --provider gemini --model gemini-3.5-flash-lite
+.venv/bin/python -m audience_simulator.cli cleanup
+```
+
+L’ablation è sperimentale e riprendibile via cache; può richiedere4.356policy su36asset. Il cleanup è dry run salvo `--apply`: scadenza30giorni per log e cache non referenziata, snapshot e run preservati. Il progetto include i tipiTS generati dai contratti Pydantic con `audience schemas`.
 
 ## Audit, previsione e validazione
 

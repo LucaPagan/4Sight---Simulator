@@ -171,14 +171,20 @@ class Repository:
             conn.execute(update(tables[kind]).where(tables[kind].c.id == resource_id).values(payload=payload))
         return self.get(kind, resource_id)
 
-    def create_run(self, scenario_id, key):
+    def create_run(self, scenario_id, key, runtime_selection=None):
         table = tables["simulation_runs"]
         with self.engine.connect() as conn:
             row = conn.execute(
                 select(table.c.id).where(table.c.scenario_id == scenario_id, table.c.idempotency_key == key)
             ).first()
         if row:
-            return self.get("simulation_runs", row[0])
+            existing = self.get("simulation_runs", row[0])
+            if runtime_selection and (
+                existing.get("provider", "ollama"),
+                existing.get("requested_model"),
+            ) != (runtime_selection["provider"], runtime_selection["model"]):
+                raise ValueError("Chiave idempotente già usata con un modello diverso")
+            return existing
         try:
             return self.create(
                 "simulation_runs",
@@ -192,16 +198,12 @@ class Repository:
                     "required_policies": 0,
                     "error": None,
                     "phase": "queued",
+                    "provider": (runtime_selection or {}).get("provider", "ollama"),
+                    "requested_model": (runtime_selection or {}).get("model"),
                 },
             )
         except IntegrityError:
-            with self.engine.connect() as conn:
-                row = conn.execute(
-                    select(table.c.id).where(
-                        table.c.scenario_id == scenario_id, table.c.idempotency_key == key
-                    )
-                ).one()
-            return self.get("simulation_runs", row[0])
+            return self.create_run(scenario_id, key, runtime_selection)
 
     def update_run(self, run_id, **changes):
         current = self.get("simulation_runs", run_id)

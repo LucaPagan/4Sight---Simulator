@@ -1,0 +1,22 @@
+# Switch locale / Gemini cloud — 14 novembre 2026
+
+Estensione richiesta dall'utente: usare anche il cloud gratuito per accelerare i test. Scelta dell'utente: account Google AI Studio/Gemini già disponibile. La precedente preferenza «solo locale» è quindi aggiornata.
+
+Alternative esaminate: Groq Free (JSON strict, ma quote giornaliere/tokens limitate); OpenRouter :free (50 richieste/giorno senza acquisti, insufficiente per un panel); Gemini Free (scelto dall'utente). Modello iniziale proposto: Gemini 3.5 Flash-Lite per velocità; Gemini 3.8 Flash come alternativa da confrontare. Input/output gratuiti solo usando il Free Tier del progetto Google; l'app non può verificare da una API key se l'account abbia billing attivo. Nessun fallback pagato, nessun tool di grounding o generazione media. Limiti specifici visibili in AI Studio, non promesse di servizio illimitato. Non dichiarare «più forte» o «più veloce» senza misure del nostro task.
+
+UI: selettore Locale/Ollama o Cloud/Gemini, modello, configurazione chiave tramite campo password backend, conferma progetto Free Tier senza billing, collegamenti a quote e policy dati. Selezione fissata per run: cambiare selettore influenza solo nuove simulazioni. Per passare al cloud si crea una nuova run dello stesso scenario; le policy locali non si mescolano a quelle cloud. Cache distinta per provider/modello/prompt. Snapshot delle risposte necessari al replay; Gemini non espone un digest immutabile dei pesi, registrare modelVersion e dichiarare questo limite.
+
+HTTP diretto con httpx già installato, host Google fisso, header API key, JSON Schema e Pydantic comuni. Nessun SDK/framework aggiunto. Credenziali fuori da SQLite, report, log, OpenAPI e S3: file locale 0600 sotto artifacts oppure variabile ambiente; API di lettura mostra solo configured. Rate limit 429 produce stato riprendibile con tempo suggerito, senza fallback o cambio di modello. Retry breve solo per quota temporanea, cap 60 secondi; quota giornaliera interrompe e conserva la cache. Test singolo dal pannello con dati sintetici, latenza reale e risposta validata, non qualifica scientifica automatica.
+
+## Task e verifiche
+1. Contratto provider e validatore condiviso; test HTTP Gemini: header, schema, JSON invalido, blocchi safety, quota, chiave mai inclusa nei risultati.
+2. Chiave sicura e configurazione, selezione per run/preflight/resume/idempotenza; test per isolamento cache e provider della run invariato.
+3. UI switch/configurazione/test singolo, OpenAPI/tipi/README/Compose. Build, typecheck e test unitari senza browser.
+4. Suite completa, smoke cloud reale solo dopo inserimento chiave dell'utente. Mantieni attiva la run locale in corso; nessun risultato inventato.
+
+Fonti ufficiali consultate: [prezzi](https://aistudio.google.com/docs/pricing), [quote](https://aistudio.google.com/docs/rate-limits), [JSON strutturato](https://aistudio.google.com/docs/structured-output), [API keys](https://aistudio.google.com/docs/api-key). Verificate il 14/11/2026. Il Free Tier prevede condizioni specifiche sul trattamento dei dati: avviso nel pannello prima dell'invio del brief.
+
+## Terza opzione richiesta — Cloudflare Workers AI
+L'utente chiede una quota gratuita ricorrente più ampia rispetto al suo progetto Google. Scelta tecnica proposta e dichiarata: Cloudflare Workers AI, piano Workers Free, 10.000 Neurons/giorno rinnovabili alle00:00UTC; esaurimento→stop, nessun upgrade. Modelli allowlist finali: `@cf/google/gemma-4-26b-a4b-it` (default) e `@cf/zai-org/glm-4.7-flash` (confronto). Il primo candidato Qwen3-30B è stato escluso dopo verifica della dismissione prevista il20/11/2026. Nessuna promessa «illimitato per sempre» o superiorità di qualità. Gli altri candidati verificati non soddisfano meglio il vincolo: Cerebras è ora un trial da5$ di30giorni, Mistral API richiede billing, Groq Free ha200ktoken/giorno sul modello120B. Fonte Cloudflare aggiornata12/11/2026: https://developers.cloudflare.com/workers-ai/platform/pricing/.
+
+REST diretto a api.cloudflare.com, AccountID32hex+token Workers AI, segreto locale separato da Gemini. Stessa validazione e cache, provider+modello fissati per run, limiter privato condiviso fra prove e panel. Nessuna rotazione automatica per aggirare le quote. UI separa credenziali e permette il confronto con lo stesso pannello di prova. Mostrare la quota in Neurons e consumo misurato quando presente, senza inventare quanti agenti siano garantiti.

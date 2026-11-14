@@ -34,7 +34,7 @@ def policy_key(payload):
     ).hexdigest()
 
 
-def evaluation_plan(brief: CampaignBrief, profiles, digest):
+def evaluation_plan(brief: CampaignBrief, profiles, digest, prompt_version=PROMPT_VERSION):
     regimes = sorted(
         {
             calendar_regime(brief.date_from + timedelta(days=d))
@@ -63,7 +63,7 @@ def evaluation_plan(brief: CampaignBrief, profiles, digest):
                         "notes": brief.notes,
                     },
                     "model_digest": digest,
-                    "prompt_version": PROMPT_VERSION,
+                    "prompt_version": prompt_version,
                 }
                 work.append(
                     {
@@ -77,7 +77,49 @@ def evaluation_plan(brief: CampaignBrief, profiles, digest):
     return work
 
 
+def evaluation_schema(payload):
+    references = [
+        f"{group}.{field}"
+        for group in ("creative", "profile", "campaign")
+        for field in payload.get(group, {})
+    ] + ["assumption.placement", "assumption.age_prior"]
+    schema = AgentEvaluation.model_json_schema()
+    schema["properties"]["evidence"]["items"] = {"type": "string", "enum": references}
+    schema["required"] = list(schema["properties"])
+    return schema
+
+
+def validate_evaluation(raw, payload):
+    references = evaluation_schema(payload)["properties"]["evidence"]["items"]["enum"]
+    evaluation = AgentEvaluation.model_validate_json(raw)
+    normalizations = 0
+    for index, reference in enumerate(evaluation.evidence):
+        if "." not in reference:
+            matches = [r for r in references if r.rsplit(".", 1)[1] == reference]
+            if len(matches) == 1:
+                evaluation.evidence[index] = matches[0]
+                normalizations += 1
+    for reference in evaluation.evidence:
+        if reference in {"assumption.placement", "assumption.age_prior"}:
+            continue
+        parts = reference.split(".")
+        value = payload
+        if parts[0] not in {"creative", "profile", "campaign"}:
+            raise ValueError("evidence non consentita")
+        for part in parts:
+            if not isinstance(value, dict) or part not in value:
+                raise ValueError("evidence inesistente")
+            value = value[part]
+    if payload.get("campaign", {}).get("price_eur") is None and "price_unknown" not in evaluation.frictions:
+        evaluation.frictions.append("price_unknown")
+    AgentEvaluation.model_validate(evaluation.model_dump())
+    return evaluation.model_dump(), normalizations
+
+
 class OllamaClient:
+    provider = "ollama"
+    prompt_version = PROMPT_VERSION
+
     def __init__(self, base_url="http://127.0.0.1:11434", model="qwen3.5:9b", transport=None):
         self.base_url, self.model = base_url.rstrip("/"), model
         self.http = httpx.Client(base_url=self.base_url, timeout=180, transport=transport, trust_env=False)
@@ -108,14 +150,7 @@ class OllamaClient:
 
     def evaluate(self, payload):
         start = time.monotonic()
-        references = [
-            f"{group}.{field}"
-            for group in ("creative", "profile", "campaign")
-            for field in payload.get(group, {})
-        ] + ["assumption.placement", "assumption.age_prior"]
-        schema = AgentEvaluation.model_json_schema()
-        schema["properties"]["evidence"]["items"] = {"type": "string", "enum": references}
-        schema["required"] = list(schema["properties"])
+        schema = evaluation_schema(payload)
         response = self.http.post(
             "/api/chat",
             json={
@@ -145,32 +180,9 @@ class OllamaClient:
         if data.get("done") is not True:
             raise ValueError("Risposta LLM incompleta")
         raw = data["message"]["content"]
-        evaluation = AgentEvaluation.model_validate_json(raw)
-        normalizations = 0
-        for index, reference in enumerate(evaluation.evidence):
-            if "." not in reference:
-                matches = [r for r in references if r.rsplit(".", 1)[1] == reference]
-                if len(matches) == 1:
-                    evaluation.evidence[index] = matches[0]
-                    normalizations += 1
-        for reference in evaluation.evidence:
-            if reference in {"assumption.placement", "assumption.age_prior"}:
-                continue
-            parts = reference.split(".")
-            value = payload
-            if parts[0] not in {"creative", "profile", "campaign"}:
-                raise ValueError("evidence non consentita")
-            for part in parts:
-                if not isinstance(value, dict) or part not in value:
-                    raise ValueError("evidence inesistente")
-                value = value[part]
-        if (
-            payload.get("campaign", {}).get("price_eur") is None
-            and "price_unknown" not in evaluation.frictions
-        ):
-            evaluation.frictions.append("price_unknown")
+        evaluation, normalizations = validate_evaluation(raw, payload)
         return {
-            "evaluation": evaluation.model_dump(),
+            "evaluation": evaluation,
             "seconds": time.monotonic() - start,
             "tokens": data.get("eval_count", 0),
             "prompt_tokens": data.get("prompt_eval_count", 0),

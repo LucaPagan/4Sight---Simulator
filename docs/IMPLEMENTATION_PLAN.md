@@ -111,3 +111,6 @@ T10 generate_population/plan_evaluations/evaluate_agent:120profili20/fascia,pesi
 LLM:benchmarkpass,digest/prompt/snapshot,100%policy,gateinput,replay. Aggregati:traincutoff,baselinecomparison,calibration,coverage85–98%per90%nominaleconampiezza,augmentationthreshold,pubblicarescoreanchefailure,notestscore. Età:6fasce,mathbudget,sensitivity/inversione/neutro,diversità,provenance,nofalseaccuracy,CPMsnull/scenario. Prodotto:nuovobrief,120LLMagenti,reportdual,NDL/CDF/FGR,699export+age,README+video3min,CI/tests.
 
 Stop reportcompleto per leakage/budget/math/policy missing. Go teorico per età senza label con theory_based, mai accuratezza inventata. Primo passo eseguibile T01 dopo materializzazione CSV. Validazione umana non ottenibile dal solo realismo LLM.
+
+## Estensione approvata dall'utente — 14/11/2026
+L'utente richiede uno switch per test più rapidi su cloud gratuito e sceglie Google AI Studio/Gemini. Il vincolo precedente «solo locale» è aggiornato: Ollama resta disponibile; ogni nuova run può selezionare Gemini Free. Disegno e ticket: `docs/CLOUD_RUNTIME_DESIGN.md`. Il cloud non modifica accuratezza scientifica o dimensione del panel. Chiave non presente: predisporre l'inserimento sicuro nell'app e non dichiarare verificata l'inferenza cloud prima della prova reale.

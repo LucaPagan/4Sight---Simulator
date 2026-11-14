@@ -1,9 +1,0 @@
-pyproject.toml
-backend/audience_simulator/__init__.py
-backend/audience_simulator.egg-info/PKG-INFO
-backend/audience_simulator.egg-info/SOURCES.txt
-backend/audience_simulator.egg-info/dependency_links.txt
-backend/audience_simulator.egg-info/entry_points.txt
-backend/audience_simulator.egg-info/requires.txt
-backend/audience_simulator.egg-info/top_level.txt
-tests/test_dataset_audit.py

@@ -17,12 +17,13 @@ entry = service.import_dataset(cfg.data_dir)
 assert not entry["audit"]["errors"]
 redis = Redis.from_url(cfg.redis_url)
 assert redis.ping()
-job = Queue(connection=redis).enqueue("math.sqrt", 16)
-for _ in range(20):
-    if job.is_finished:
-        break
-    time.sleep(0.5)
-assert job.result == 4, job.get_status()
+for queue in ["default", "cloud"]:
+    job = Queue(queue, connection=redis).enqueue("math.sqrt", 16)
+    for _ in range(20):
+        if job.is_finished:
+            break
+        time.sleep(0.5)
+    assert job.result == 4, (queue, job.get_status())
 service.store.write_json("smoke/storage-check.json", {"ok": True})
 s3 = boto3.client(
     "s3",
@@ -40,7 +41,7 @@ print(
         {
             "postgresql": "pass",
             "import_dataset": "pass",
-            "redis_rq_worker": "pass",
+            "redis_rq_workers_default_and_cloud": "pass",
             "s3_read_write": "pass",
             "api_health": "pass",
             "ollama_ready": service.client().status()["ready"],

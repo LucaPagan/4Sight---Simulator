@@ -15,13 +15,19 @@ def main():
     clean.add_argument(
         "--apply", action="store_true", help="Rimuovi log e cache non referenziata scaduti; default dry run"
     )
-    for name in ["bootstrap", "train", "predict", "validate", "schemas", "ablation"]:
+    for name in ["bootstrap", "train", "predict", "validate", "schemas"]:
         commands.add_parser(name)
+    ablation = commands.add_parser("ablation")
+    ablation.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
+    ablation.add_argument("--model", default=None)
     benchmark = commands.add_parser("benchmark")
     benchmark.add_argument("--model", default="qwen3.5:9b")
+    benchmark.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
     benchmark.add_argument("--cases", type=int, default=96)
     simulate = commands.add_parser("simulate")
     simulate.add_argument("brief", type=Path)
+    simulate.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
+    simulate.add_argument("--model", default=None)
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
@@ -54,18 +60,21 @@ def main():
     elif args.command == "benchmark":
         from .benchmark import benchmark_model
 
-        result = benchmark_model(service, args.model, args.cases)
+        result = benchmark_model(service, args.model, args.cases, args.provider)
     elif args.command == "ablation":
         from .ablation import run_ablation
 
-        result = run_ablation(service)
+        result = run_ablation(service, service.client(args.provider, args.model))
     elif args.command == "cleanup":
         from .cleanup import cleanup
 
         result = cleanup(service, apply=args.apply)
     elif args.command == "simulate":
         scenario = service.create_scenario(json.loads(args.brief.read_text()))
-        run = service.repo.create_run(scenario["id"], "cli")
+        selected = service.client(args.provider, args.model)
+        run = service.repo.create_run(
+            scenario["id"], "cli", {"provider": args.provider, "model": selected.model}
+        )
         service.execute_run(run["id"])
         result = service.repo.get("simulation_runs", run["id"])
     elif args.command == "schemas":

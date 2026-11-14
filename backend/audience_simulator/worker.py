@@ -10,4 +10,5 @@ if __name__ == "__main__":
     from redis import Redis
     from rq import Worker
 
-    Worker(["default"], connection=Redis.from_url(settings().redis_url)).work()
+    cfg = settings()
+    Worker([cfg.worker_queue], connection=Redis.from_url(cfg.redis_url)).work()
