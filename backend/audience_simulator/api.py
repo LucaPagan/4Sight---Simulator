@@ -1,0 +1,284 @@
+import json
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, Response
+
+from .config import settings
+from .contracts import SimulationResult, SimulationRun
+from .datasets import ASSETS, FILES
+from .evidence import ASSUMPTIONS, EVIDENCE
+from .reporting import csv_export
+from .schemas import CampaignBrief, ComparisonRequest, Creative, ExportRequest, SimulationRequest
+from .service import SimulationService
+
+
+def create_app(service=None):
+    svc = service or SimulationService(settings())
+    app = FastAPI(
+        title="Audience Simulator",
+        version="0.1.0",
+        description="Laboratorio di campagne con consumatori sintetici; non previsioni demografiche osservate.",
+    )
+    app.state.service = svc
+
+    @app.middleware("http")
+    async def local_origin(request, call_next):
+        from urllib.parse import urlparse
+
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return JSONResponse({"detail": "Origine non consentita"}, status_code=403)
+        length = request.headers.get("content-length", "0")
+        if not length.isdecimal():
+            return JSONResponse({"detail": "Content-Length non valido"}, status_code=400)
+        if int(length) > 64 * 1024 * 1024:
+            return JSONResponse({"detail": "Upload oltre il limite 64 MB"}, status_code=413)
+        return await call_next(request)
+
+    @app.exception_handler(KeyError)
+    async def missing(request, exc):
+        return JSONResponse({"detail": "Risorsa non trovata"}, status_code=404)
+
+    @app.exception_handler(ValueError)
+    async def invalid(request, exc):
+        return JSONResponse({"detail": str(exc)[:500]}, status_code=422)
+
+    @app.get("/api/v1/health")
+    def health():
+        return {"status": "ok", "local_only": True}
+
+    @app.get("/api/v1/runtime/status")
+    def runtime():
+        return svc.client().status()
+
+    @app.get("/api/v1/evidence")
+    def evidence():
+        return {"sources": EVIDENCE, "assumptions": ASSUMPTIONS}
+
+    @app.get("/api/v1/datasets")
+    def datasets():
+        return svc.repo.list("datasets")
+
+    @app.get("/api/v1/datasets/{resource_id}")
+    def dataset(resource_id: str):
+        return svc.repo.get("datasets", resource_id)
+
+    @app.post("/api/v1/datasets/bootstrap")
+    def bootstrap():
+        return svc.import_dataset(svc.cfg.data_dir)
+
+    @app.post("/api/v1/datasets/import")
+    async def import_files(files: list[UploadFile]):
+        allowed = {Path(f).name: f for f in [*FILES.values(), *ASSETS]}
+        if len(files) != 13 or len({f.filename for f in files}) != 13:
+            raise HTTPException(422, "Fornisci esattamente i 13 CSV con nomi univoci")
+        destination = svc.store.path(f"uploads/{uuid4()}")
+        total = 0
+        for upload in files:
+            filename = upload.filename or ""
+            if filename not in allowed:
+                raise HTTPException(422, "Nome file non consentito")
+            raw = await upload.read(8 * 1024 * 1024 + 1)
+            total += len(raw)
+            if len(raw) > 8 * 1024 * 1024 or total > 50 * 1024 * 1024:
+                raise HTTPException(413, "CSV oltre il limite")
+            path = destination / allowed[filename]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        return svc.import_dataset(destination, activate=True)
+
+    @app.get("/api/v1/campaigns")
+    def campaigns():
+        svc.ensure_kit()
+        return svc.repo.list("campaigns")
+
+    @app.post("/api/v1/campaigns", status_code=201)
+    def campaign(brief: CampaignBrief):
+        return svc.create_scenario(brief.model_dump(mode="json"))
+
+    @app.get("/api/v1/assets")
+    def assets():
+        kit = svc.ensure_kit()
+        return json.loads(kit["assets"].to_json(orient="records"))
+
+    @app.post("/api/v1/assets", status_code=201)
+    def new_asset(creative: Creative):
+        return svc.repo.create("assets", creative.model_dump())
+
+    @app.post("/api/v1/scenarios", status_code=201)
+    def scenario(brief: CampaignBrief):
+        return svc.create_scenario(brief.model_dump(mode="json"))
+
+    @app.get("/api/v1/scenarios/{scenario_id}")
+    def get_scenario(scenario_id: str):
+        return svc.repo.get("scenarios", scenario_id)
+
+    @app.post("/api/v1/populations/generate")
+    def population(request: dict):
+        scenario = svc.repo.get("scenarios", request["scenario_id"])
+        return svc.repo.get("populations", scenario["population_id"])
+
+    @app.get("/api/v1/populations/{population_id}")
+    def get_population(population_id: str):
+        return svc.repo.get("populations", population_id)
+
+    @app.post("/api/v1/simulations/preflight")
+    def preflight(request: dict):
+        return svc.preflight(request["scenario_id"])
+
+    @app.post("/api/v1/simulations", status_code=202)
+    def simulate(request: SimulationRequest):
+        svc.repo.get("scenarios", request.scenario_id)
+        run = svc.repo.create_run(request.scenario_id, request.idempotency_key)
+        if run["status"] == "queued":
+            svc.dispatch(run["id"])
+        return run
+
+    @app.get("/api/v1/simulations", response_model=list[SimulationRun])
+    def runs():
+        return svc.repo.list("simulation_runs")
+
+    @app.get("/api/v1/simulations/{run_id}/status", response_model=SimulationRun)
+    def status(run_id: str):
+        return svc.repo.get("simulation_runs", run_id)
+
+    @app.post("/api/v1/simulations/{run_id}/cancel")
+    def cancel(run_id: str):
+        run = svc.repo.get("simulation_runs", run_id)
+        if run["completion_status"] == "complete":
+            return run
+        return svc.repo.update_run(run_id, status="canceled", phase="canceled")
+
+    @app.post("/api/v1/simulations/{run_id}/resume", status_code=202)
+    def resume(run_id: str):
+        from datetime import UTC, datetime
+
+        run = svc.repo.get("simulation_runs", run_id)
+        if run["completion_status"] == "complete":
+            return run
+        if run["status"] == "running":
+            heartbeat = datetime.fromisoformat(run.get("heartbeat_at", run["created_at"]))
+            if heartbeat.tzinfo is None:
+                heartbeat = heartbeat.replace(tzinfo=UTC)
+            if (datetime.now(UTC) - heartbeat).total_seconds() < 600:
+                raise HTTPException(409, "Simulazione già in corso")
+        runtime = svc.client().status()
+        if run.get("model_digest") and runtime.get("digest") and run["model_digest"] != runtime["digest"]:
+            raise HTTPException(409, "Modello cambiato: crea una nuova run")
+        svc.repo.update_run(run_id, status="queued", error=None)
+        svc.dispatch(run_id)
+        return svc.repo.get("simulation_runs", run_id)
+
+    @app.get("/api/v1/predictions", response_model=SimulationResult)
+    def predictions(run_id: str):
+        try:
+            return svc.result(run_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/v1/simulations/{run_id}/agents/{agent_id}")
+    def agent(run_id: str, agent_id: str):
+        result = svc.result(run_id)
+        profile = next((p for p in result["profiles"] if p["agent_id"] == agent_id), None)
+        if not profile:
+            raise HTTPException(404, "Agente non trovato")
+        return {
+            "profile": profile,
+            "states": [s for s in result.get("behavior", {}).get("states", []) if s["agent_id"] == agent_id],
+            "events": [e for e in result.get("behavior", {}).get("events", []) if e["agent_id"] == agent_id],
+        }
+
+    @app.post("/api/v1/comparisons")
+    def comparison(request: ComparisonRequest):
+        result = svc.result(request.run_id)
+        if result.get("completion_status") != "complete":
+            raise HTTPException(409, "Panel non completo")
+        return result["comparison"]
+
+    @app.post("/api/v1/backtests")
+    def backtest():
+        return svc.backtest()
+
+    @app.get("/api/v1/backtests")
+    def backtests():
+        return svc.repo.list("validation_runs")
+
+    @app.get("/api/v1/backtests/{report_id}")
+    def get_backtest(report_id: str):
+        return svc.repo.get("validation_runs", report_id)
+
+    @app.post("/api/v1/official-forecast")
+    def official_forecast():
+        result = svc.official_forecast()
+        svc.store.write_bytes("official/predictions.csv", csv_export(result["predictions"]))
+        svc.store.write_bytes("official/age_predictions.csv", csv_export(result["predictions"], age=True))
+        return {
+            "rows": len(result["predictions"]),
+            "completion_status": "preliminary",
+            "download_url": "/api/v1/official-forecast/aggregate",
+            "age_download_url": "/api/v1/official-forecast/age",
+        }
+
+    @app.get("/api/v1/official-forecast/{kind}")
+    def download_official(kind: str):
+        if kind not in {"aggregate", "age"}:
+            raise HTTPException(404, "Export non trovato")
+        path = svc.store.path(
+            "official/predictions.csv" if kind == "aggregate" else "official/age_predictions.csv"
+        )
+        if not path.exists():
+            raise HTTPException(409, "Genera prima le previsioni")
+        return Response(
+            path.read_bytes(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{kind}.csv"'},
+        )
+
+    @app.post("/api/v1/exports", status_code=201)
+    def export(request: ExportRequest):
+        run = svc.repo.get("simulation_runs", request.run_id)
+        if run["completion_status"] != "complete" and not request.allow_preliminary:
+            raise HTTPException(409, "Run non completa; export preliminare solo se richiesto esplicitamente")
+        result = svc.result(request.run_id)
+        export_id = str(uuid4())
+        suffix = "json" if request.kind == "report" else "csv"
+        key = f"exports/{export_id}.{suffix}"
+        raw = (
+            json.dumps(result, ensure_ascii=False, allow_nan=False).encode()
+            if request.kind == "report"
+            else csv_export(result["predictions"], request.kind == "age")
+        )
+        svc.store.write_bytes(key, raw)
+        svc.store.write_json(
+            f"exports/{export_id}.meta.json",
+            {"key": key, "kind": request.kind, "completion_status": run["completion_status"]},
+        )
+        return {
+            "id": export_id,
+            "status": "succeeded",
+            "completion_status": run["completion_status"],
+            "download_url": f"/api/v1/exports/{export_id}",
+        }
+
+    @app.get("/api/v1/exports/{export_id}")
+    def download(export_id: str):
+        from uuid import UUID
+
+        try:
+            UUID(export_id)
+            meta = svc.store.read_json(f"exports/{export_id}.meta.json")
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(404, "Export non trovato") from exc
+        path = svc.store.path(meta["key"])
+        return Response(
+            path.read_bytes(),
+            media_type="application/json" if meta["kind"] == "report" else "text/csv",
+            headers={"Content-Disposition": f'attachment; filename="audience-{export_id}{path.suffix}"'},
+        )
+
+    return app
+
+
+app = create_app()

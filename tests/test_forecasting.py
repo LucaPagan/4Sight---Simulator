@@ -2,9 +2,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from audience_simulator.datasets import load_dataset
-from audience_simulator.forecasting import ForecastModels, build_features, forecast, validate_models
+from audience_simulator.forecasting import (
+    ForecastModels,
+    build_features,
+    forecast,
+    train_model_registry,
+    validate_models,
+)
 
 
 @pytest.fixture(scope="module")
@@ -20,10 +25,14 @@ def models(kit):
 def test_features_do_not_change_when_validation_labels_change(kit):
     before = build_features(kit, kit["future"], "2026-11-01")
     changed = {**kit, "history": kit["history"].copy()}
-    changed["history"].loc[changed["history"].data > "2026-11-01", ["click", "impression", "spesa", "ctr", "cpm"]] = 999999
+    changed["history"].loc[
+        changed["history"].data > "2026-11-01", ["click", "impression", "spesa", "ctr", "cpm"]
+    ] = 999999
     after = build_features(changed, kit["future"], "2026-11-01")
     assert before.equals(after)
-    assert not {"click", "ctr", "cpm", "spesa", "impression", "frequenza", "copertura"}.intersection(before.columns)
+    assert not {"click", "ctr", "cpm", "spesa", "impression", "frequenza", "copertura"}.intersection(
+        before.columns
+    )
 
 
 def test_forecast_preserves_699_rows_and_shared_budget(kit, models):
@@ -60,3 +69,24 @@ def test_validation_reports_only_known_period(kit, models):
     assert report["age_accuracy"] is None
     assert report["ctr_weighted_mae_pp"] >= 0
     assert 0 <= report["ctr_coverage_90"] <= 1
+
+
+def test_registry_selects_candidate_and_calibrates_only_inside_training(kit):
+    selected = train_model_registry(kit)
+    assert selected.recipe["calibration_cutoff"] == "2026-11-01"
+    assert all(f["validation_end"] <= "2026-11-01" for f in selected.recipe["inner_folds"])
+    assert selected.ctr_model in {"glm_binomial", "hierarchical_smoothing"}
+    choice = selected.recipe["selection"]
+    assert choice["selected_log_loss"] <= choice["other_log_loss"]
+
+
+def test_residual_decomposition_keeps_within_day_uncertainty():
+    import pandas as pd
+    from audience_simulator.forecasting import residual_components
+
+    daily, noise = residual_components(
+        pd.Series(["day1", "day1", "day2", "day2"]),
+        np.array([[-1.0, -0.5, 0], [1.0, 0.5, 0], [-1.0, -0.5, 0], [1.0, 0.5, 0]]),
+    )
+    np.testing.assert_allclose(daily, 0)
+    np.testing.assert_allclose(noise, [1.0, 0.5])

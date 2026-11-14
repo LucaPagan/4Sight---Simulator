@@ -1,8 +1,7 @@
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import pytest
-
 from audience_simulator.datasets import audit_dataset, load_dataset
 
 
@@ -17,7 +16,12 @@ def test_kit_audit_preserves_raw_and_reports_known_anomalies():
     assert result["errors"] == []
     assert result["overspend"][0]["adset_id"] == "FGR-AS1"
     assert result["overspend"][0]["severity"] == "error"
-    assert load_dataset(Path("data"))["history"].loc[lambda x: (x.data == "2026-10-21") & (x.adset_id == "FGR-AS1"), "spesa"].iloc[0] == 397.55
+    assert (
+        load_dataset(Path("data"))["history"]
+        .loc[lambda x: (x.data == "2026-10-21") & (x.adset_id == "FGR-AS1"), "spesa"]
+        .iloc[0]
+        == 397.55
+    )
 
 
 def test_duplicate_target_and_missing_foreign_key_are_rejected(tmp_path):

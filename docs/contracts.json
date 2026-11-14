@@ -1,0 +1,627 @@
+{
+  "Creative": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Id",
+        "type": "string"
+      },
+      "headline": {
+        "maxLength": 250,
+        "minLength": 1,
+        "title": "Headline",
+        "type": "string"
+      },
+      "primary_text": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "title": "Primary Text",
+        "type": "string"
+      },
+      "visual_description": {
+        "default": "",
+        "maxLength": 2000,
+        "title": "Visual Description",
+        "type": "string"
+      },
+      "cta": {
+        "default": "Scopri di più",
+        "maxLength": 100,
+        "title": "Cta",
+        "type": "string"
+      },
+      "lever": {
+        "default": "value",
+        "enum": [
+          "scarcity",
+          "urgency",
+          "black_friday",
+          "value"
+        ],
+        "title": "Lever",
+        "type": "string"
+      },
+      "format": {
+        "default": "immagine",
+        "enum": [
+          "immagine",
+          "video",
+          "carosello"
+        ],
+        "title": "Format",
+        "type": "string"
+      },
+      "claim_verified": {
+        "default": false,
+        "title": "Claim Verified",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "headline",
+      "primary_text"
+    ],
+    "title": "Creative",
+    "type": "object"
+  },
+  "CampaignBrief": {
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 150,
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      },
+      "brand": {
+        "maxLength": 150,
+        "minLength": 1,
+        "title": "Brand",
+        "type": "string"
+      },
+      "product_description": {
+        "maxLength": 3000,
+        "minLength": 3,
+        "title": "Product Description",
+        "type": "string"
+      },
+      "vertical": {
+        "enum": [
+          "beauty_skincare",
+          "pet_ecommerce",
+          "abbigliamento"
+        ],
+        "title": "Vertical",
+        "type": "string"
+      },
+      "objective": {
+        "default": "vendite",
+        "enum": [
+          "vendite",
+          "traffico"
+        ],
+        "title": "Objective",
+        "type": "string"
+      },
+      "platform": {
+        "const": "meta",
+        "default": "meta",
+        "title": "Platform",
+        "type": "string"
+      },
+      "country": {
+        "default": "IT",
+        "enum": [
+          "IT",
+          "ES",
+          "FR",
+          "DE"
+        ],
+        "title": "Country",
+        "type": "string"
+      },
+      "date_from": {
+        "default": "2026-11-16",
+        "format": "date",
+        "title": "Date From",
+        "type": "string"
+      },
+      "date_to": {
+        "default": "2026-11-30",
+        "format": "date",
+        "title": "Date To",
+        "type": "string"
+      },
+      "daily_adset_budget_eur": {
+        "default": 150,
+        "maximum": 100000,
+        "minimum": 0,
+        "title": "Daily Adset Budget Eur",
+        "type": "number"
+      },
+      "creatives": {
+        "items": {
+          "$ref": "#/$defs/Creative"
+        },
+        "maxItems": 4,
+        "title": "Creatives",
+        "type": "array"
+      },
+      "population_size": {
+        "const": 120,
+        "default": 120,
+        "title": "Population Size",
+        "type": "integer"
+      },
+      "seed": {
+        "default": 42,
+        "maximum": 2147483647,
+        "minimum": 0,
+        "title": "Seed",
+        "type": "integer"
+      },
+      "age_shares": {
+        "items": {
+          "type": "number"
+        },
+        "maxItems": 6,
+        "minItems": 6,
+        "title": "Age Shares",
+        "type": "array"
+      },
+      "age_effects": {
+        "items": {
+          "type": "number"
+        },
+        "maxItems": 6,
+        "minItems": 6,
+        "title": "Age Effects",
+        "type": "array"
+      },
+      "sensitivity_profile": {
+        "default": "central",
+        "enum": [
+          "conservative",
+          "central",
+          "exploratory"
+        ],
+        "title": "Sensitivity Profile",
+        "type": "string"
+      },
+      "prior_strength": {
+        "default": 1.0,
+        "maximum": 2,
+        "minimum": 0,
+        "title": "Prior Strength",
+        "type": "number"
+      },
+      "placement": {
+        "default": "instagram_feed",
+        "enum": [
+          "instagram_feed",
+          "facebook_feed",
+          "instagram_stories"
+        ],
+        "title": "Placement",
+        "type": "string"
+      },
+      "browsing_task": {
+        "default": "casual_scrolling",
+        "enum": [
+          "casual_scrolling",
+          "product_research",
+          "comparison_shopping"
+        ],
+        "title": "Browsing Task",
+        "type": "string"
+      },
+      "price_eur": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Price Eur"
+      },
+      "notes": {
+        "default": "",
+        "maxLength": 2000,
+        "title": "Notes",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "brand",
+      "product_description",
+      "vertical"
+    ],
+    "title": "CampaignBrief",
+    "type": "object"
+  },
+  "AgentEvaluation": {
+    "additionalProperties": false,
+    "properties": {
+      "clarity": {
+        "maximum": 4,
+        "minimum": 0,
+        "title": "Clarity",
+        "type": "integer"
+      },
+      "interest": {
+        "maximum": 4,
+        "minimum": 0,
+        "title": "Interest",
+        "type": "integer"
+      },
+      "credibility": {
+        "maximum": 4,
+        "minimum": 0,
+        "title": "Credibility",
+        "type": "integer"
+      },
+      "friction": {
+        "maximum": 4,
+        "minimum": 0,
+        "title": "Friction",
+        "type": "integer"
+      },
+      "conditional_action": {
+        "enum": [
+          "consider_click",
+          "defer",
+          "not_interested"
+        ],
+        "title": "Conditional Action",
+        "type": "string"
+      },
+      "frictions": {
+        "items": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "title": "Frictions",
+        "type": "array"
+      },
+      "evidence": {
+        "items": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "title": "Evidence",
+        "type": "array"
+      },
+      "unknowns": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 6,
+        "title": "Unknowns",
+        "type": "array"
+      },
+      "conditional_reaction": {
+        "maxLength": 400,
+        "minLength": 1,
+        "title": "Conditional Reaction",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clarity",
+      "interest",
+      "credibility",
+      "friction",
+      "conditional_action",
+      "evidence",
+      "conditional_reaction"
+    ],
+    "title": "AgentEvaluation",
+    "type": "object"
+  },
+  "AgePrediction": {
+    "additionalProperties": true,
+    "properties": {
+      "age_band": {
+        "title": "Age Band",
+        "type": "string"
+      },
+      "impression_share": {
+        "title": "Impression Share",
+        "type": "number"
+      },
+      "ctr_estimate": {
+        "title": "Ctr Estimate",
+        "type": "number"
+      },
+      "ctr_range": {
+        "items": {
+          "type": "number"
+        },
+        "title": "Ctr Range",
+        "type": "array"
+      },
+      "expected_impressions": {
+        "title": "Expected Impressions",
+        "type": "number"
+      },
+      "clicks_estimate": {
+        "title": "Clicks Estimate",
+        "type": "number"
+      },
+      "expected_spend": {
+        "title": "Expected Spend",
+        "type": "number"
+      },
+      "evidence_level": {
+        "title": "Evidence Level",
+        "type": "string"
+      }
+    },
+    "required": [
+      "age_band",
+      "impression_share",
+      "ctr_estimate",
+      "ctr_range",
+      "expected_impressions",
+      "clicks_estimate",
+      "expected_spend",
+      "evidence_level"
+    ],
+    "title": "AgePrediction",
+    "type": "object"
+  },
+  "ConsumerProfile": {
+    "additionalProperties": true,
+    "properties": {
+      "agent_id": {
+        "title": "Agent Id",
+        "type": "string"
+      },
+      "age_band": {
+        "title": "Age Band",
+        "type": "string"
+      },
+      "category_affinity": {
+        "title": "Category Affinity",
+        "type": "number"
+      },
+      "budget_sensitivity": {
+        "title": "Budget Sensitivity",
+        "type": "number"
+      },
+      "purchase_need": {
+        "title": "Purchase Need",
+        "type": "number"
+      },
+      "brand_familiarity": {
+        "title": "Brand Familiarity",
+        "type": "number"
+      },
+      "population_weight": {
+        "title": "Population Weight",
+        "type": "number"
+      },
+      "advertising_literacy": {
+        "title": "Advertising Literacy",
+        "type": "number"
+      },
+      "repeat_tolerance": {
+        "title": "Repeat Tolerance",
+        "type": "number"
+      }
+    },
+    "required": [
+      "agent_id",
+      "age_band",
+      "category_affinity",
+      "budget_sensitivity",
+      "purchase_need",
+      "brand_familiarity",
+      "population_weight",
+      "advertising_literacy",
+      "repeat_tolerance"
+    ],
+    "title": "ConsumerProfile",
+    "type": "object"
+  },
+  "Prediction": {
+    "additionalProperties": true,
+    "properties": {
+      "ad_id": {
+        "title": "Ad Id",
+        "type": "string"
+      },
+      "date": {
+        "title": "Date",
+        "type": "string"
+      },
+      "ctr_pred": {
+        "title": "Ctr Pred",
+        "type": "number"
+      },
+      "cpm_pred": {
+        "title": "Cpm Pred",
+        "type": "number"
+      },
+      "ctr_interval": {
+        "items": {
+          "type": "number"
+        },
+        "title": "Ctr Interval",
+        "type": "array"
+      },
+      "cpm_interval": {
+        "items": {
+          "type": "number"
+        },
+        "title": "Cpm Interval",
+        "type": "array"
+      },
+      "expected_impressions": {
+        "title": "Expected Impressions",
+        "type": "number"
+      },
+      "expected_clicks": {
+        "title": "Expected Clicks",
+        "type": "number"
+      },
+      "expected_spend": {
+        "title": "Expected Spend",
+        "type": "number"
+      },
+      "ages": {
+        "items": {
+          "$ref": "#/$defs/AgePrediction"
+        },
+        "title": "Ages",
+        "type": "array"
+      },
+      "cold_start": {
+        "title": "Cold Start",
+        "type": "boolean"
+      },
+      "confidence_status": {
+        "title": "Confidence Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ad_id",
+      "date",
+      "ctr_pred",
+      "cpm_pred",
+      "ctr_interval",
+      "cpm_interval",
+      "expected_impressions",
+      "expected_clicks",
+      "expected_spend",
+      "ages",
+      "cold_start",
+      "confidence_status"
+    ],
+    "title": "Prediction",
+    "type": "object"
+  },
+  "SimulationRun": {
+    "additionalProperties": true,
+    "properties": {
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "scenario_id": {
+        "title": "Scenario Id",
+        "type": "string"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      },
+      "phase": {
+        "title": "Phase",
+        "type": "string"
+      },
+      "completion_status": {
+        "title": "Completion Status",
+        "type": "string"
+      },
+      "progress": {
+        "title": "Progress",
+        "type": "integer"
+      },
+      "completed_policies": {
+        "title": "Completed Policies",
+        "type": "integer"
+      },
+      "required_policies": {
+        "title": "Required Policies",
+        "type": "integer"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Error"
+      },
+      "result_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Result Key"
+      },
+      "created_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Created At"
+      },
+      "model_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Model Name"
+      },
+      "heartbeat_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Heartbeat At"
+      }
+    },
+    "required": [
+      "id",
+      "scenario_id",
+      "status",
+      "phase",
+      "completion_status",
+      "progress",
+      "completed_policies",
+      "required_policies"
+    ],
+    "title": "SimulationRun",
+    "type": "object"
+  }
+}

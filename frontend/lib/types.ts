@@ -1,0 +1,9 @@
+export type {AgePrediction as Age, Prediction, ConsumerProfile as Profile, SimulationRun as Run} from "./contracts.generated";
+import type {Prediction, ConsumerProfile as Profile} from "./contracts.generated";
+
+// Editable form drafts; API submission validates the generated CampaignBrief contract.
+export type Creative = {id: string; headline: string; primary_text: string; visual_description: string; cta: string; lever: string; format: string; claim_verified: boolean};
+export type Brief = {name: string; brand: string; product_description: string; vertical: string; objective: string; platform: string; country: string; date_from: string; date_to: string; daily_adset_budget_eur: number; creatives: Creative[]; population_size: number; seed: number; age_shares: number[]; age_effects: number[]; sensitivity_profile: string; prior_strength: number; placement: string; browsing_task: string; price_eur: number | null; notes: string};
+export type Event = {agent_id: string; ad_id: string; date: string; noticed: boolean; clicked: boolean; click_probability: number; explanation: string | null; exposure_context: {calendar_regime: string; state_before: {fatigue: number; exposure_count: number}}};
+export type Result = {completion_status: string; quantitative_source?: string; profiles: Profile[]; predictions: Prediction[]; model?: {name: string; digest: string}; behavior?: {raw_panel: {ad_id: string; raw_panel_ctr: number}[]; events: Event[]}; report?: {limitations: string[]; diagnoses: {creative_id: string; hypothesis: string; claim_status: string; experiment: {metric: string; design: string}}[]}; comparison?: {pairwise: {a: string; b: string; probability_a_better: number; probability_b_better: number; difference_pp: number; status: string; winner: string | null}[]}};
+export type Runtime = {available: boolean; ready: boolean; selected_model: string; error: string | null; digest?: string};
