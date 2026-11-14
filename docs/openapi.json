@@ -1228,7 +1228,8 @@
           },
           "population_size": {
             "type": "integer",
-            "const": 120,
+            "maximum": 1000.0,
+            "minimum": 30.0,
             "title": "Population Size",
             "default": 120
           },

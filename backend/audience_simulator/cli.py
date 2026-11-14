@@ -15,7 +15,7 @@ def main():
     clean.add_argument(
         "--apply", action="store_true", help="Rimuovi log e cache non referenziata scaduti; default dry run"
     )
-    for name in ["bootstrap", "train", "predict", "validate", "schemas"]:
+    for name in ["bootstrap", "train", "predict", "validate", "validate-cold-start", "schemas"]:
         commands.add_parser(name)
     ablation = commands.add_parser("ablation")
     ablation.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
@@ -28,6 +28,19 @@ def main():
     simulate.add_argument("brief", type=Path)
     simulate.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
     simulate.add_argument("--model", default=None)
+    public = commands.add_parser("public-campaign", help="Test retrospettivo su campagna Meta pubblica reale")
+    public.add_argument("action", choices=["prepare", "run", "score"])
+    public.add_argument("identifier", nargs="?")
+    public.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="gemini")
+    public.add_argument("--model", default=None)
+    public.add_argument("--max-new", type=int, default=240)
+    corpus = commands.add_parser("corpus", help="Corpus di campagne reali confrontabili (fonti pubbliche)")
+    corpus.add_argument("action", choices=["prepare"])
+    corpus.add_argument("--upworthy-file", type=Path, help="CSV exploratory già scaricato")
+    corpus.add_argument("--gwwc-file", type=Path, help="CSV GWWC già scaricato (opzionale)")
+    corpus.add_argument(
+        "--download", action="store_true", help="Scarica le fonti fissate per checksum (solo se esplicito)"
+    )
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
@@ -38,7 +51,45 @@ def main():
     from .service import SimulationService
 
     service = SimulationService(settings())
-    if args.command == "bootstrap":
+    if args.command == "corpus":
+        import io
+
+        import pandas as pd
+
+        from .corpus import UPWORTHY_SHA256, fetch_source, prepare_corpus
+
+        if args.download:
+            upworthy_raw = fetch_source("upworthy")
+            gwwc_raw = fetch_source("gwwc")
+        elif args.upworthy_file:
+            import hashlib
+
+            upworthy_raw = args.upworthy_file.read_bytes()
+            if hashlib.sha256(upworthy_raw).hexdigest() != UPWORTHY_SHA256:
+                parser.error("Checksum del file Upworthy non corrispondente")
+            gwwc_raw = args.gwwc_file.read_bytes() if args.gwwc_file else None
+        else:
+            parser.error("corpus prepare richiede --upworthy-file oppure --download")
+        service.store.write_bytes("corpus/upworthy/source.csv", upworthy_raw)
+        result = prepare_corpus(
+            service.store,
+            pd.read_csv(io.BytesIO(upworthy_raw)),
+            pd.read_csv(io.BytesIO(gwwc_raw)) if gwwc_raw else None,
+        )
+    elif args.command == "public-campaign":
+        from .retrospective import prepare_public_campaign, run_public_campaign, score_public_campaign
+
+        if args.action == "prepare":
+            result = prepare_public_campaign(service)
+        elif not args.identifier:
+            parser.error("run richiede case_id; score richiede evaluation_id")
+        elif args.action == "run":
+            result = run_public_campaign(
+                service, args.identifier, service.client(args.provider, args.model), max_new=args.max_new
+            )
+        else:
+            result = score_public_campaign(service, args.identifier)
+    elif args.command == "bootstrap":
         result = service.import_dataset(service.cfg.data_dir)
     elif args.command == "train":
         model = service.get_models()
@@ -57,6 +108,11 @@ def main():
         }
     elif args.command == "validate":
         result = service.backtest()
+    elif args.command == "validate-cold-start":
+        from .forecasting import validate_new_campaigns
+
+        result = validate_new_campaigns(service.ensure_kit())
+        service.store.write_json("validation/cold-start.json", result)
     elif args.command == "benchmark":
         from .benchmark import benchmark_model
 

@@ -11,16 +11,38 @@ def stable_seed(*parts):
 
 
 def generate_population(brief: CampaignBrief):
-    rng = np.random.default_rng(stable_seed(brief.seed, brief.vertical, brief.brand))
+    return generate_profiles(
+        brief.seed,
+        brief.vertical,
+        brief.brand,
+        brief.age_shares,
+        {
+            "beauty_skincare": "routine e familiarità skincare ipotetiche",
+            "pet_ecommerce": "animale e necessità ipotetici, non osservati",
+            "abbigliamento": "stile e necessità di taglia ipotetici",
+        }[brief.vertical],
+        brief.population_size,
+    )
+
+
+def band_sizes(size):
+    """Split the panel across the six age bands as evenly as possible (120 -> 20 each)."""
+    base, extra = divmod(size, len(AGES))
+    return [base + (1 if s < extra else 0) for s in range(len(AGES))]
+
+
+def generate_profiles(seed, vertical, brand, age_shares, category_context, size=120):
+    rng = np.random.default_rng(stable_seed(seed, vertical, brand))
     profiles = []
+    sizes = band_sizes(size)
     for s, band in enumerate(AGES):
-        for j in range(20):
+        for j in range(sizes[s]):
             traits = rng.beta(2, 2, 7)
             profiles.append(
                 {
                     "agent_id": f"synthetic-{s + 1}-{j + 1:03d}",
                     "age_band": band,
-                    "population_weight": brief.age_shares[s] / 20,
+                    "population_weight": age_shares[s] / sizes[s],
                     **dict(
                         zip(
                             [
@@ -35,14 +57,10 @@ def generate_population(brief: CampaignBrief):
                             map(float, traits),
                         )
                     ),
-                    "category_context": {
-                        "beauty_skincare": "routine e familiarità skincare ipotetiche",
-                        "pet_ecommerce": "animale e necessità ipotetici, non osservati",
-                        "abbigliamento": "stile e necessità di taglia ipotetici",
-                    }[brief.vertical],
+                    "category_context": category_context,
                     "profile_version": "profiles-v1",
                     "assumption_id": "weak-beta-traits-v1",
-                    "seed": brief.seed,
+                    "seed": seed,
                     "evidence_level": "modeled_assumption",
                 }
             )

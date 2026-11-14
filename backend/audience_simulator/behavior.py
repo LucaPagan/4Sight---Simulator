@@ -3,7 +3,7 @@ from collections import Counter
 import numpy as np
 from scipy.special import expit, logit
 
-from .agents import calendar_regime
+from .agents import calendar_regime, policy_diagnostics
 from .audience import stable_seed
 from .schemas import AGES
 
@@ -122,6 +122,8 @@ def simulate_panel(brief, profiles, policy_map, plan, predictions, replicates=1)
                             "noticed": noticed,
                             "relevant": relevant_event,
                             "clicked": clicked,
+                            "stated_action": evaluation["conditional_action"],
+                            "stated_action_used_in_gates": False,
                             "attention_probability": float(gate[0]),
                             "click_probability": float(np.prod(gate)),
                             "raw_click_probability": float(raw_p),
@@ -191,6 +193,12 @@ def simulate_panel(brief, profiles, policy_map, plan, predictions, replicates=1)
         "states": final_states,
         "raw_panel": summaries,
         "policy_findings": findings,
+        "policy_quality": policy_diagnostics(
+            [
+                {"agent_id": aid, "creative_id": cid, "regime": regime, "evaluation": evaluation}
+                for (aid, cid, regime), evaluation in lookup.items()
+            ]
+        ),
         "trace_limit": 10000,
         "replicates": replicates,
         "warning": "Esposizioni sintetiche campionate; non un evento per ogni impression prevista.",

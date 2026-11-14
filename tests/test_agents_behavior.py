@@ -120,8 +120,43 @@ def test_behavior_replay_ignores_and_memory_arms_are_separate():
     assert all(e["explanation"] is None for e in first["events"] if not e["noticed"])
     assert all(s["exposure_count"] == 1 for s in first["states"])
     assert all(e["exposure_context"]["placement_source"] == "scenario_assumption" for e in first["events"])
+    assert all(e["stated_action"] == "consider_click" for e in first["events"])
+    assert all(e["stated_action_used_in_gates"] is False for e in first["events"])
+    assert first["policy_quality"]["by_creative"][0]["distinct_reactions"] == 1
     reversed_brief = brief.model_copy(update={"creatives": list(reversed(brief.creatives))})
     other = simulate_panel(reversed_brief, profiles, policies, records, predictions)
     assert sorted(first["events"], key=lambda e: e["exposure_id"]) == sorted(
         other["events"], key=lambda e: e["exposure_id"]
     )
+
+
+def test_policy_diagnostics_flags_repetition_without_inventing_human_validity():
+    from audience_simulator.agents import policy_diagnostics
+
+    rows = [
+        {
+            "agent_id": str(i),
+            "creative_id": "A",
+            "regime": "ordinary",
+            "evaluation": {**policy(), "conditional_reaction": "Potrei guardare il prodotto."},
+        }
+        for i in range(8)
+    ]
+    rows[1]["evaluation"]["conditional_reaction"] = "POTREI guardare il prodotto!"
+    result = policy_diagnostics(rows)
+    first = result["by_creative"][0]
+    assert first["policies"] == first["profiles"] == 8
+    assert first["distinct_reactions"] == 1
+    assert first["most_repeated_fraction"] == 1
+    assert first["flags"] == ["repetitive_reactions", "uniform_scores"]
+    assert result["human_behavior_validated"] is False
+    rows[-1]["evaluation"] = {
+        **policy(interest=0),
+        "conditional_reaction": "Non mi serve.",
+        "conditional_action": "not_interested",
+    }
+    other = policy_diagnostics(rows)["by_creative"][0]
+    assert other["distinct_reactions"] == 2
+    assert other["most_repeated_fraction"] == 0.875
+    assert other["actions"] == {"consider_click": 7, "not_interested": 1}
+    assert "uniform_scores" not in other["flags"]

@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-14T12:00:00Z",
+  "title": "Design System: Audience Simulator",
+  "extensions": {
+    "colorMeta": {
+      "olivetti-blue": { "role": "primary", "displayName": "Olivetti Blue", "canonical": "#14357A", "tonalRamp": ["#0A1B3E", "#0F2759", "#14357A", "#3C5A97", "#6A86B8", "#9DB0D3", "#C9D4E8", "#E6ECF7"] },
+      "action-red": { "role": "secondary", "displayName": "Action Red", "canonical": "#D42B21", "tonalRamp": ["#5C0F0A", "#8A1711", "#AE1F17", "#D42B21", "#E4635B", "#EE958F", "#F6C2BF", "#FBE3E1"] },
+      "mark-amber": { "role": "tertiary", "displayName": "Mark Amber", "canonical": "#F0A300", "tonalRamp": ["#5C3F00", "#8A5E00", "#B87D00", "#F0A300", "#F5BC45", "#F8D07E", "#FBE3B0", "#FFF1CC"] },
+      "mark-green": { "role": "tertiary", "displayName": "Mark Green", "canonical": "#2E8B6A", "tonalRamp": ["#0F3326", "#16513D", "#1F7155", "#2E8B6A", "#5BA88C", "#8AC1AC", "#BADAD0", "#E1F0EA"] },
+      "ground": { "role": "neutral", "displayName": "Cool Ground", "canonical": "#F3F5F7", "tonalRamp": ["#1B1D21", "#4A515B", "#7C8796", "#A4ADB9", "#D5DAE0", "#E6EAEE", "#F3F5F7", "#FFFFFF"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#1B1D21", "tonalRamp": ["#0B0C0E", "#1B1D21", "#2F333A", "#4A515B", "#6B7480", "#7C8796", "#A4ADB9", "#D5DAE0"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The single h1 per page, blue, tightly tracked." },
+      "headline": { "displayName": "Headline", "purpose": "Section h2 titles." },
+      "title": { "displayName": "Title", "purpose": "h3 and disclosure summaries." },
+      "body": { "displayName": "Body", "purpose": "Default copy at 16px/1.5; lead at 18px." },
+      "label": { "displayName": "Label", "purpose": "Field labels, nav links, step labels at 500 weight." }
+    },
+    "shadows": [
+      { "name": "selection-ring", "value": "inset 0 0 0 1.5px #14357A", "purpose": "Thickens the border of a selected choice card (2px for a selected tab). The only box-shadow in the system." }
+    ],
+    "motion": [
+      { "name": "state-fast", "value": "0.15s ease-out", "purpose": "Button background and border color changes." },
+      { "name": "progress-fill", "value": "width 0.4s cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Progress bar fill." },
+      { "name": "spin", "value": "0.9s linear infinite", "purpose": "Loading spinner. All motion collapses to 0.01ms under prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "tablet", "value": "1100px" },
+      { "name": "phone", "value": "800px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single red next-action button per view.",
+      "html": "<button class=\"ds-btn-primary\">Continua al pubblico</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 24px;border:2px solid transparent;border-radius:4px;background:#D42B21;color:#fff;font:600 16px/1.5 Jost,system-ui,sans-serif;cursor:pointer;transition:background-color .15s ease-out}.ds-btn-primary:hover{background:#AE1F17}.ds-btn-primary:focus-visible{outline:3px solid #14357A;outline-offset:2px}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Blue outlined alternative action.",
+      "html": "<button class=\"ds-btn-secondary\">Indietro</button>",
+      "css": ".ds-btn-secondary{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 24px;border:2px solid #14357A;border-radius:4px;background:#fff;color:#14357A;font:600 16px/1.5 Jost,system-ui,sans-serif;cursor:pointer;transition:background-color .15s ease-out}.ds-btn-secondary:hover{background:#E6ECF7}.ds-btn-secondary:focus-visible{outline:3px solid #14357A;outline-offset:2px}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Labelled input with Field Stroke border and Blue Wash focus ring.",
+      "html": "<label class=\"ds-field\">Budget<input class=\"ds-input\" value=\"1.500\"></label>",
+      "css": ".ds-field{display:block;font:500 15px/1.5 Jost,system-ui,sans-serif;color:#1B1D21}.ds-input{display:block;width:100%;margin-top:8px;padding:12px;min-height:48px;background:#fff;border:1px solid #7C8796;border-radius:4px;font:400 16px Jost,system-ui,sans-serif;font-variant-numeric:tabular-nums}.ds-input:focus{border-color:#14357A;outline:3px solid #E6ECF7}"
+    },
+    {
+      "name": "Rail Navigation",
+      "kind": "nav",
+      "refersTo": "rail",
+      "description": "Blue rail entries; the active one is filled red.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-nav ds-active\" href=\"#\">Nuova simulazione</a><a class=\"ds-nav\" href=\"#\">Risultati</a></nav>",
+      "css": ".ds-rail{display:flex;flex-direction:column;gap:4px;width:240px;padding:32px 16px;background:#14357A;font-family:Jost,system-ui,sans-serif}.ds-nav{display:flex;align-items:center;min-height:44px;padding:0 12px;border-radius:4px;color:#fff;text-decoration:none;font-weight:500}.ds-nav:hover{background:rgba(255,255,255,.12)}.ds-nav.ds-active{background:#D42B21}.ds-nav:focus-visible{outline:3px solid #fff;outline-offset:2px}"
+    },
+    {
+      "name": "Choice Card",
+      "kind": "chip",
+      "refersTo": "card",
+      "description": "Selectable tile; selected gets Blue Wash and an inset blue ring.",
+      "html": "<label class=\"ds-choice ds-selected\"><b>Equilibrato</b><span>Pubblico misto</span></label>",
+      "css": ".ds-choice{display:flex;flex-direction:column;gap:4px;padding:16px;background:#fff;border:1px solid #7C8796;border-radius:4px;font-family:Jost,system-ui,sans-serif;color:#1B1D21;cursor:pointer}.ds-choice span{color:#4A515B;font-size:15px}.ds-choice.ds-selected{border-color:#14357A;box-shadow:inset 0 0 0 1.5px #14357A;background:#E6ECF7}"
+    },
+    {
+      "name": "Sheet Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "White hairline-bordered container, 6px radius, no shadow.",
+      "html": "<section class=\"ds-card\"><h2>Riepilogo</h2><p>3 creatività</p></section>",
+      "css": ".ds-card{padding:24px;background:#fff;border:1px solid #D5DAE0;border-radius:6px;font-family:Jost,system-ui,sans-serif;color:#1B1D21}.ds-card h2{margin:0 0 8px;font-size:18px;font-weight:600;line-height:1.3}.ds-card p{margin:0}"
+    },
+    {
+      "name": "Creative Mark Label",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "The signature: a fixed geometric mark beside the creative name (circle, square, triangle, diamond).",
+      "html": "<span class=\"ds-mark-label\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"10\" r=\"9\" fill=\"#14357A\"/></svg><span>Creatività A</span></span> <span class=\"ds-mark-label\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 20 20\" aria-hidden=\"true\"><rect x=\"1.5\" y=\"1.5\" width=\"17\" height=\"17\" fill=\"#F0A300\"/></svg><span>Creatività B</span></span>",
+      "css": ".ds-mark-label{display:inline-flex;align-items:center;gap:8px;font:600 18px Jost,system-ui,sans-serif;color:#1B1D21}"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "28px pill; blue by default, amber waiting, red bad.",
+      "html": "<span class=\"ds-badge\">Completata</span>",
+      "css": ".ds-badge{display:inline-flex;align-items:center;min-height:28px;padding:0 12px;border-radius:14px;background:#E6ECF7;color:#14357A;font:600 14px Jost,system-ui,sans-serif;white-space:nowrap}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Olivetti Advertisement",
+    "overview": "An operations tool for a non-technical marketer comparing Meta ad creatives before spending, used in short daylight office sessions. It borrows the grammar of 1960s Italian corporate advertising: large flat fields of deep blue, plain geometry, a geometric sans, and a single red reserved for the thing the person should do next. It is a light theme throughout; the blue carries structure and identity, not mood.\n\nDensity is calm and form-like. Surfaces are white sheets on a cool pale ground, separated by 1px hairlines, never by shadow. Each creative owns a fixed geometric mark (circle, square, triangle, diamond) that recurs in the form, chart, verdict and list, so A versus B is legible by shape and not by color alone.",
+    "keyCharacteristics": [
+      "Full-bleed blue rail on the left, 240px; blue titles; blue for every selected state.",
+      "Red appears only on the primary button, the active nav entry, and error surfaces.",
+      "One typeface (Jost), tabular numerals on every figure.",
+      "1px hairlines, 4px and 6px radii, no decorative shadows.",
+      "Geometric creative marks as the system's one signature."
+    ],
+    "rules": [
+      { "name": "The One Red Rule", "body": "Red marks the next action or a fault, nothing else. Titles, selection and emphasis are blue.", "section": "colors" },
+      { "name": "The Shape-Before-Color Rule", "body": "A creative is identified by its mark shape first; its color is secondary and must never be the only cue.", "section": "colors" },
+      { "name": "The Tabular Rule", "body": "Any figure (CTR, CPM, budget, counts) uses tabular numerals.", "section": "typography" },
+      { "name": "The Sentence-Case Rule", "body": "No uppercase, no letter-spaced small caps. The only tracking is the h1 tightening and the wordmark's +0.01em.", "section": "typography" },
+      { "name": "The Hairline Rule", "body": "Separate with a 1px Hairline or a tint, never a shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do reserve Action Red for the single primary button, the active nav entry, and errors.",
+      "Do pair every creative color with its mark shape and keep the shape-to-index mapping fixed.",
+      "Do use tabular numerals for every metric and keep text at 14px (0.875rem) or larger.",
+      "Do separate surfaces with 1px Hairline borders and Blue Wash fills; keep radii at 4px or 6px.",
+      "Do keep body copy in sentence case Jost at 400-600 weight."
+    ],
+    "donts": [
+      "Don't add drop shadows or glows; the inset selection ring is the only box-shadow.",
+      "Don't put a colored side stripe thicker than 1px on any card or row.",
+      "Don't nest a bordered card inside a bordered card.",
+      "Don't use blue for errors or red for selection or emphasis.",
+      "Don't add eyebrow or kicker labels above titles, or uppercase tracked text."
+    ]
+  }
+}

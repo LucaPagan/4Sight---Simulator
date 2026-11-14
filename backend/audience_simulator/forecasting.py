@@ -229,6 +229,22 @@ def forecast(kit, models, rows, seed=42, n_draws=1000):
     }
 
 
+def forecast_new_campaign(kit, models, rows, seed=42, n_draws=1000):
+    """New brief labels cannot reference historical ads or adsets, including imported datasets."""
+    scoped = rows.reset_index(drop=True).copy()
+    for column, known in [("ad_id", models.known_ads), ("adset_id", models.utilization)]:
+        public = scoped[column].astype(str)
+        reserved = set(kit["history"][column]) | set(known)
+        prefix = "user-brief:"
+        while any(prefix + value in reserved for value in public):
+            prefix = "_" + prefix
+        scoped[column] = prefix + public
+    predictions, draws = forecast(kit, models, scoped, seed=seed, n_draws=n_draws)
+    for prediction, (_, row) in zip(predictions, rows.iterrows()):
+        prediction["ad_id"], prediction["adset_id"] = row.ad_id, row.adset_id
+    return predictions, draws
+
+
 def validate_models(kit, models, n_draws=1000):
     val = (
         kit["history"]
@@ -350,3 +366,68 @@ def train_model_registry(kit):
         },
     }
     return final
+
+
+def validate_new_campaigns(kit, n_draws=100):
+    """Leave whole adsets out of training; score future dates through the new-brief path."""
+    from .agents import policy_key
+
+    history = kit["history"]
+    validation = history.loc[(history.data > "2026-11-01") & (history.data <= "2026-11-15")]
+    if validation.empty:
+        raise ValueError("Nessuna osservazione per la verifica cold start")
+    folds, errors, weights = [], [], []
+    for adset, actual in validation.groupby("adset_id", sort=True):
+        restricted = {**kit, "history": history.loc[history.adset_id != adset].copy()}
+        # Fixed GLM recipe; do not select its algorithm using the held-out outcomes.
+        model = ForecastModels.fit(restricted, cutoff="2026-11-01")
+        rows = actual.copy()
+        rows["adset_id"] = "user-adset"
+        rows["campaign_id"] = "user-campaign"
+        rows["asset_id"] = "new-" + rows.asset_id.astype(str)
+        assets = rows[["asset_id"]].drop_duplicates().assign(data_lancio=str(rows.data.min()))
+        original_assets = restricted["assets"].loc[~restricted["assets"].asset_id.isin(assets.asset_id)]
+        scenario_kit = {**restricted, "assets": pd.concat([original_assets, assets], ignore_index=True)}
+        predictions, _ = forecast_new_campaign(scenario_kit, model, rows, n_draws=n_draws)
+        expected = np.array([r["ctr_pred"] / 100 for r in predictions])
+        observed = actual.click.to_numpy() / actual.impression.to_numpy()
+        w = actual.impression.to_numpy()
+        error = abs(expected - observed) * 100
+        errors.extend(error.tolist())
+        weights.extend(w.tolist())
+        folds.append(
+            {
+                "held_out_adset": str(adset),
+                "training_cutoff": model.cutoff,
+                "training_adsets": sorted(
+                    restricted["history"]
+                    .loc[restricted["history"].data <= model.cutoff, "adset_id"]
+                    .unique()
+                    .tolist()
+                ),
+                "validation_rows": len(actual),
+                "all_rows_cold_start": all(r["cold_start"] for r in predictions),
+                "ctr_weighted_mae_pp": float(np.average(error, weights=w)),
+                "cpm_mae_eur": float(
+                    np.mean(abs(actual.cpm.to_numpy() - np.array([r["cpm_pred"] for r in predictions])))
+                ),
+                "forecast_hash": policy_key(predictions),
+            }
+        )
+    return {
+        "source_type": "simulated_kit",
+        "certified": False,
+        "validation_rows": len(validation),
+        "model_recipe": "glm_binomial_fixed_no_validation_selection",
+        "folds": folds,
+        "ctr_weighted_mae_pp": float(np.average(errors, weights=weights)),
+        "agents_evaluated": False,
+        "age_accuracy": None,
+        "limitations": [
+            "Synthetic kit outcomes do not establish real marketing accuracy",
+            "Entire adset removed; other adsets of the same brand can remain in training",
+            "Fixed GLM baseline, not the validation-selected production candidate",
+            "New asset IDs and user-adset path reproduce missing delivery history",
+            "No test of content sensitivity or added predictive value of LLM responses",
+        ],
+    }

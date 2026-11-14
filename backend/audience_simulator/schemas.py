@@ -34,7 +34,7 @@ class CampaignBrief(StrictModel):
     date_to: date = date(2026, 11, 30)
     daily_adset_budget_eur: float = Field(default=150, ge=0, le=100000)
     creatives: list[Creative] = Field(default_factory=list, max_length=4)
-    population_size: Literal[120] = 120
+    population_size: int = Field(default=120, ge=30, le=1000)
     seed: int = Field(default=42, ge=0, le=2147483647)
     age_shares: list[float] = Field(default_factory=lambda: [1 / 6] * 6, min_length=6, max_length=6)
     age_effects: list[float] = Field(

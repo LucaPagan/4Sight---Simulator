@@ -122,7 +122,12 @@ def compare_predictions(rows, draws):
 def build_report(brief, predictions, behavior, comparison, coverage):
     diagnoses = []
     for creative in brief.creatives:
-        findings = [f for f in behavior.get("policy_findings", []) if f["ad_id"] == creative.id]
+        # Missing price is injected by input validation, not discovered independently by consumers.
+        findings = [
+            {**f, "frictions": {k: v for k, v in f["frictions"].items() if k != "price_unknown"}}
+            for f in behavior.get("policy_findings", [])
+            if f["ad_id"] == creative.id
+        ]
         counts = Counter()
         for finding in findings:
             counts.update(finding["frictions"])
@@ -149,6 +154,28 @@ def build_report(brief, predictions, behavior, comparison, coverage):
     return {
         "title": brief.name,
         "coverage": coverage,
+        "panel_quality": behavior.get("policy_quality"),
+        "input_gaps": [
+            {
+                "field": "price_eur",
+                "source": "input_validation",
+                "message": "Prezzo non indicato: informazione mancante nel brief.",
+            }
+        ]
+        if brief.price_eur is None
+        else [],
+        "measurement_status": {
+            "certified": False,
+            "human_observations": 0,
+            "aggregate_kpi_source": "historical_baseline",
+            "agents_change_aggregate_kpis": False,
+            "stated_action_used_in_gates": False,
+            "behavioral_validity": "not_validated_against_human_responses",
+            "aggregate_accuracy": "not_validated_on_real_campaigns",
+            "agent_contribution": "Ipotesi qualitative, reazioni condizionali e scenario per età.",
+            "chart_behavior": "Le stime aggregate sono calcolate prima degli agenti e non si aggiornano con ogni reazione.",
+            "completion_meaning": "Copertura delle valutazioni e controlli di coerenza completati; accuratezza predittiva non certificata.",
+        },
         "age_accuracy": None,
         "consumer_voice": "Reazioni condizionali del panel sintetico, non testimonianze di persone reali.",
         "analyst_voice": "CTR/CPM ancorati allo storico; decomposizione per età e gate restano ipotesi.",
@@ -157,7 +184,7 @@ def build_report(brief, predictions, behavior, comparison, coverage):
         "limitations": [
             "Dati del kit simulati",
             "Nessuna label individuale o per età",
-            "120 agenti non sono 120 osservazioni umane indipendenti",
+            f"{brief.population_size} agenti non sono {brief.population_size} osservazioni umane indipendenti",
             "Intervalli condizionati a modello, policy e prior",
             "Ablation panel non ancora dimostrata: forecast aggregato baseline",
         ],

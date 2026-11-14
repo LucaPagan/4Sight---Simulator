@@ -30,3 +30,17 @@ Modello aggregate-v4.1435righe training al01/11,444validation02–15/11. CTR wei
 ## Copertura del piano
 
 T01–T08:dati/baseline/API/età implementati e verificati. T09:runtime e benchmark implementati, qualifica empirica aperta. T10–T16:profili,policy,behavior,brief,report e scenari budget implementati; test automatici e simulazione reale120×2completa. T17:runner ablation/validationUI implementati, esperimento reale aperto. T18:storico/dettaglio agente implementati, browser non riverificato. T19:journeys/browser parzialmente verificati secondo autorizzazione. T20:security/retention/recovery testati. T21:CI/build/Compose e smoke servizi verificati. T22:README/schema/export completati, video aperto.
+
+## Aggiornamento: audit generale del motore e dati reali
+
+La verifica corrente del backend conta **92 test Python passati**, Ruff e mypy25moduli senza errori; resta il warning TestClient già noto. Revisione indipendente finale senza problemi alti o medi aperti. Nessun frontend modificato o verificato da questo lavoro: l'altro agente sta lavorando su UI/UX e dimensione del panel.
+
+Corretto il riuso accidentale dello storico per collisioni di ID creatività/adset, anche nei dataset importati. Il forecast del nuovo brief e il nuovo backtest usano lo stesso isolamento, conservando gli ID pubblici. Risolte collisioni di metadati asset nel test cold start. Separati prezzo mancante e scoperte qualitative; aggiunte diagnostiche generali della ripetitività e distinzione fra intenzione dichiarata LLM e clic campionato dai gate.
+
+Dodici contrasti reali Gemini sui tre settori mostrano sensibilità agli input: chiarezza informativo-vago +4/+3/+3 e interesse alto-basso bisogno/affinità +2/+2/+2. Non sono una verifica contro persone. Nella precedente run completa120×2, reazioni normalizzate distinte107/109, intenzioni differenti e nessun superamento della soglia euristica di ripetizione. Nessuna varietà artificiale aggiunta ai testi.
+
+Backtest senza storico dell'intero adset:12fold,444righe sintetiche, CTRMAEponderato0,959pp. Controllo GLM fisso con ID conosciuti:0,424pp. Non è una validazione predittiva su campagne reali e non equivale alla vecchia baseline scelta sulla validation. Il caso reale Meta GWWC è ripetibile con esiti esclusi dai prompt, hash dello snapshot e verifica della fonte prima dello scoring.
+
+Dettagli, comandi, limiti e condizioni di promozione: [MVP_VALIDATION.md](MVP_VALIDATION.md). Il completamento delle chiamate non certifica realismo umano, accuratezza dei KPI o validità generale. Il server API non è stato riavviato durante la run locale lunga; le nuove informazioni del report saranno servite dopo il caricamento del backend aggiornato.
+
+Il replay pubblico GWWC è concluso240/240 su Gemini3.5Flash-Lite, con97policy riprese dalla cache e143nuove valide. Ordine puntuale del panel opposto al CTR osservato; preferenza ordinale quasi nulla (2,1667 contro2,1750). CTR osservati1,0664% e0,7960%, differenza0,2705pp con intervallo descrittivo95%[-0,1014;0,6463]. Conclusione: confronto inconclusivo, nessuna evidenza di capacità predittiva generale o certificazione. Nessuna modifica del modello per adeguarlo a questi esiti.

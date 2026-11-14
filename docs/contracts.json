@@ -151,8 +151,9 @@
         "type": "array"
       },
       "population_size": {
-        "const": 120,
         "default": 120,
+        "maximum": 1000,
+        "minimum": 30,
         "title": "Population Size",
         "type": "integer"
       },

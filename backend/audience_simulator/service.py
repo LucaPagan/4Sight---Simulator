@@ -16,7 +16,7 @@ from .cloudflare import CloudflareClient
 from .config import Settings
 from .datasets import audit_dataset, load_dataset
 from .evidence import ASSUMPTIONS, EVIDENCE
-from .forecasting import forecast, train_model_registry, validate_models
+from .forecasting import forecast, forecast_new_campaign, train_model_registry, validate_models
 from .reporting import audit_predictions, build_report, compare_predictions
 from .repository import ArtifactStore, Repository
 from .schemas import CampaignBrief
@@ -245,7 +245,7 @@ class SimulationService:
         profiles = generate_population(brief)
         population = self.repo.create(
             "populations",
-            {"scenario_id": scenario["id"], "seed": brief.seed, "size": 120, "profiles": profiles},
+            {"scenario_id": scenario["id"], "seed": brief.seed, "size": len(profiles), "profiles": profiles},
         )
         self.repo.bulk_create(
             "consumer_profiles", [{"payload": {**p, "population_id": population["id"]}} for p in profiles]
@@ -287,7 +287,7 @@ class SimulationService:
             "estimate_note": "Mediana delle policy recenti con identico modello/digest/prompt; stima indicativa, esclude retry e variazioni di carico."
             if estimate is not None
             else "Misure locali insufficienti per stimare la durata.",
-            "population_size": 120,
+            "population_size": len(profiles),
             "model": client.model,
             "provider": provider,
             "daily_free_neurons": runtime.get("daily_free_neurons"),
@@ -367,7 +367,7 @@ class SimulationService:
 
     def predict_brief(self, brief, signal_effects=None):
         kit, frame = self.rows_for_brief(brief)
-        predictions, draws = forecast(
+        predictions, draws = forecast_new_campaign(
             kit, self.get_models(), frame, seed=brief.seed, n_draws=self.cfg.monte_carlo_draws
         )
         # Country/objective adjustment is a benchmark scenario, never a measured demographic auction.
@@ -573,7 +573,12 @@ class SimulationService:
             predictions, draws = self.predict_brief(brief, signals)
             behavior = simulate_panel(brief, profiles, policies, plan, predictions)
             comparison = compare_predictions(predictions, draws)
-            coverage = {"required": len(plan), "completed": len(policies), "ratio": 1.0, "profiles": 120}
+            coverage = {
+                "required": len(plan),
+                "completed": len(policies),
+                "ratio": 1.0,
+                "profiles": len(profiles),
+            }
             report = build_report(brief, predictions, behavior, comparison, coverage)
             audit_predictions(predictions, brief.daily_adset_budget_eur)
             result = {
