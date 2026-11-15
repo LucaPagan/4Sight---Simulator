@@ -325,13 +325,21 @@ def decide(client, payload, build=None, temperature=0.7, attempt=0):
         seed=stable_seed(policy_key(payload), attempt) % 2**31,
         max_tokens=700,
     )
-    decision, normalized = validate_decision(result["raw"])
+    try:
+        decision, normalized = validate_decision(result["raw"])
+    except (ValueError, KeyError) as exc:
+        exc.generation_metrics = result
+        raise
     return {
         "decision": decision,
         "per_100_normalized": bool(normalized),
         "seconds": result.get("seconds"),
         "tokens": result.get("tokens", 0),
         "prompt_tokens": result.get("prompt_tokens", 0),
+        "pacing_seconds": result.get("pacing_seconds", 0),
+        "prompt_seconds": result.get("prompt_seconds"),
+        "output_seconds": result.get("output_seconds"),
+        "load_seconds": result.get("load_seconds"),
         "provider": result.get("provider"),
         "model": result.get("model"),
         "prompt_version": payload["prompt_version"],
