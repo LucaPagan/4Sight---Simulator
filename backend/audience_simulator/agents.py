@@ -145,6 +145,9 @@ def policy_diagnostics(records):
 class OllamaClient:
     provider = "ollama"
     prompt_version = PROMPT_VERSION
+    # A local model writes slowly: small card batches keep each request well inside the timeout.
+    card_batch_size = 2
+    generate_timeout = 900
 
     def __init__(self, base_url="http://127.0.0.1:11434", model="qwen3.5:9b", transport=None):
         self.base_url, self.model = base_url.rstrip("/"), model
@@ -228,16 +231,26 @@ class OllamaClient:
                 "prompt": user,
                 "options": options,
             },
+            timeout=self.generate_timeout,
         )
         response.raise_for_status()
         data = response.json()
         if data.get("done") is not True:
             raise ValueError("Risposta LLM incompleta")
+        self.last_timing = {
+            "prompt_seconds": round(data.get("prompt_eval_duration", 0) / 1e9, 1),
+            "output_seconds": round(data.get("eval_duration", 0) / 1e9, 1),
+            "load_seconds": round(data.get("load_duration", 0) / 1e9, 1),
+        }
         return {
             "raw": data["response"],
             "seconds": time.monotonic() - start,
             "tokens": data.get("eval_count", 0),
             "prompt_tokens": data.get("prompt_eval_count", 0),
+            # Ollama reports nanoseconds; a prompt read from the prefix cache shows up as a short read time.
+            "prompt_seconds": data.get("prompt_eval_duration", 0) / 1e9,
+            "output_seconds": data.get("eval_duration", 0) / 1e9,
+            "load_seconds": data.get("load_duration", 0) / 1e9,
             "provider": self.provider,
             "model": self.model,
         }

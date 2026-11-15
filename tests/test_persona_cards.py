@@ -5,14 +5,16 @@ from pathlib import Path
 
 import httpx
 import pytest
+from audience_simulator import cloud
 from audience_simulator.agents import OllamaClient
-from audience_simulator.cloud import CloudQuotaError, GeminiClient
+from audience_simulator.cloud import CloudQuotaError, CloudRuntimeError, GeminiClient
 from audience_simulator.cloudflare import CloudflareClient
 from audience_simulator.config import Settings
 from audience_simulator.persona_cards import (
     BATCH_SIZE,
     PersonaWriter,
     batch_schema,
+    card_omissions,
     describe_profile,
     skeleton_view,
     validate_card,
@@ -44,6 +46,7 @@ def opening(n):
 
 def facts_of(block):
     text = " ".join(block)
+    usage = next((line for line in block if "Usa " in line and "minuti" in line), "")
     return {
         "age": int(re.search(r"Ha (\d+) anni", text).group(1)),
         "gender": "women" if "una donna" in text else "men",
@@ -63,8 +66,8 @@ def facts_of(block):
         if "né un cane né un gatto" in text
         else "none",
         "os": "ios" if "iPhone" in text else "android",
-        "ig": "Instagram" in text,
-        "fb": "Facebook" in text,
+        "ig": "Instagram" in usage,
+        "fb": "Facebook" in usage,
         "job": "student" if "Studia" in text else "retired" if "in pensione" in text else "employed",
     }
 
@@ -207,12 +210,13 @@ def test_persistent_failure_falls_back_to_a_labelled_template(repo):
     victim = profiles[3]["agent_id"]
 
     def mutate(card, n, call):
-        card["echo_age"] = 99 if "Persona" not in card["name"] and n % 5 == 0 else card["echo_age"]
+        if n % 5 == 0:
+            card["bio"] += " Spende 40 euro al mese."
         return card
 
     cards, report = writer(repo, FakeWriter(mutate)).write(profiles)
     assert report["written_by_llm"] + report["template_fallback"] == 30
-    assert report["rejected_reasons"]["fatto_cambiato:echo_age"] >= 1
+    assert report["rejected_reasons"]["prezzo_nel_testo"] >= 1
     templates = [c for c in cards.values() if c["source"] == "template"]
     assert len(templates) == report["template_fallback"]
     assert victim in cards and all(t["name"].startswith("Persona ") and t["facts"] for t in templates)
@@ -276,10 +280,6 @@ def valid_card_for(profile):
             "eta_incoerente",
         ),
         ({"budget_eur_month": 5000}, "budget_incoerente"),
-        (
-            {"social_habits": "Guarda solo video lunghi su una piattaforma di cui non ricorda il nome."},
-            "piattaforma_mancante",
-        ),
     ],
 )
 def test_validator_catches_each_kind_of_contradiction(change, problem):
@@ -316,7 +316,31 @@ def test_pet_household_and_children_rules_respect_negation():
     )
     assert "nucleo_incoerente" in validate_card(roommates, owner)
     no_dog = good.model_copy(update={"category_relationship": "Compra spesso cose per la casa e per sé."})
-    assert "animale_mancante" in validate_card(no_dog, owner)
+    # Leaving a fact out is not a contradiction: it blocks only where the category is about that fact.
+    assert validate_card(no_dog, owner) == [] and card_omissions(no_dog, owner) == ["animale_mancante"]
+    assert "animale_mancante" in validate_card(no_dog, owner, vertical="pet_ecommerce")
+    late_negation = card.model_copy(
+        update={"social_habits": "Scorre i social la sera sul divano, i gatti non li ha mai voluti in casa."}
+    )
+    assert "animale_incoerente" not in validate_card(late_negation, no_pet)
+    details = {}
+    validate_card(with_dog, no_pet, details=details)
+    assert "cane" in details["animale_incoerente"]
+
+
+def test_echo_facts_come_from_the_skeleton_not_from_the_model(repo):
+    profiles = targeted(30)[:8]
+
+    def mutate(card, n, call):
+        card["echo_age"], card["echo_has_children"] = 99, "yes"
+        return card
+
+    fake = FakeWriter(mutate)
+    cards, report = writer(repo, fake).write(profiles)
+    assert report["written_by_llm"] == 8 and report["rejected_reasons"] == {}
+    assert all(cards[p["agent_id"]]["echo_age"] == p["age"] for p in profiles)
+    asked = fake.calls[0]["schema"]["properties"]["cards"]["items"]
+    assert not any(k.startswith("echo_") for k in asked["properties"]) and "echo_age" not in asked["required"]
 
 
 def test_batch_schema_is_flat_and_forces_one_card_per_person():
@@ -416,3 +440,80 @@ def test_service_stores_cards_on_the_population_and_refuses_untargeted_panels(se
     legacy = service.create_scenario(PAYLOAD)
     with pytest.raises(ValueError, match="pannello mirato"):
         service.write_personas(legacy["id"], client=FakeWriter())
+
+
+def test_local_models_use_small_batches_and_a_timeout_never_fails_the_run(repo):
+    profiles = targeted(30)
+
+    class Slow(FakeWriter):
+        provider, card_batch_size = "ollama", 2
+
+        def generate(self, *args, **kwargs):
+            if len(self.calls) == 0:
+                self.calls.append({})
+                raise httpx.ReadTimeout("timed out")
+            return super().generate(*args, **kwargs)
+
+    slow = Slow()
+    seen = []
+    cards, report = writer(repo, slow).write(
+        profiles[:6], progress=lambda done, total: seen.append((done, total))
+    )
+    assert report["written_by_llm"] == 6 and report["template_fallback"] == 0
+    assert report["rejected_reasons"] == {"risposta_non_valida:ReadTimeout": 2}
+    assert all(len(re.findall(r"^P\d+$", c.get("user", ""), re.M)) <= 2 for c in slow.calls)
+    assert seen[-1] == (6, 6) and len(seen) >= 3
+    assert OllamaClient.card_batch_size == 2 and OllamaClient.generate_timeout >= 600
+
+
+def test_runtime_disconnection_still_stops_the_writer(repo):
+    class Down(FakeWriter):
+        def generate(self, *args, **kwargs):
+            raise httpx.ConnectError("refused")
+
+    with pytest.raises(httpx.ConnectError):
+        writer(repo, Down()).write(targeted(30)[:4])
+
+
+def test_a_provider_failure_stops_the_writer_instead_of_writing_templates(repo):
+    class Down(FakeWriter):
+        def generate(self, *args, **kwargs):
+            raise CloudRuntimeError("Gemini ha restituito HTTP 400.")
+
+    with pytest.raises(CloudRuntimeError):
+        writer(repo, Down()).write(targeted(30)[:4])
+
+
+def test_cloud_calls_retry_a_passing_overload_and_report_the_wait(monkeypatch):
+    monkeypatch.setattr(cloud, "RETRY_DELAYS", (0, 0))
+    answers = iter([503, 503, 200])
+
+    def flaky(request):
+        status = next(answers)
+        if status != 200:
+            return httpx.Response(status, json={"error": {"message": "high demand"}})
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": '{"a": "b"}'}]}],
+            },
+        )
+
+    client = GeminiClient(
+        "k" * 30, free_tier_confirmed=True, transport=httpx.MockTransport(flaky), requests_per_minute=6000
+    )
+    assert client.generate("s", "u", {"type": "object"})["raw"] == '{"a": "b"}'
+
+    def exhausted(request):
+        return httpx.Response(
+            429, json={"error": {"message": "limit: 500 requests per day. Please retry in 38m5s or upgrade"}}
+        )
+
+    client = GeminiClient(
+        "k" * 30, free_tier_confirmed=True, transport=httpx.MockTransport(exhausted), requests_per_minute=6000
+    )
+    with pytest.raises(CloudQuotaError) as caught:
+        client.generate("s", "u", {"type": "object"})
+    assert caught.value.retry_after_seconds == 38 * 60 + 5 and "38 minuti" in str(caught.value)
+    assert cloud.retry_seconds("nessuna attesa") is None

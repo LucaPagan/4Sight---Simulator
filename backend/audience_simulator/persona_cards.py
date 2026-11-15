@@ -12,17 +12,19 @@ import re
 import time
 from collections import Counter
 
+import httpx
 from pydantic import ValidationError
 
 from .agents import policy_key
 from .audience import stable_seed
-from .cloud import CloudQuotaError
+from .cloud import CloudRuntimeError
 from .schemas import PersonaCard
 
-PERSONA_PROMPT_VERSION = "persona-writer-v1"
+PERSONA_PROMPT_VERSION = "persona-writer-v2"
 BATCH_SIZE = 8
 MAX_ATTEMPTS = 3
 USED_LIMIT = 60
+SAMPLE_LIMIT = 40
 
 VERTICAL_LABELS = {
     "pet_ecommerce": "cibo e accessori per animali domestici",
@@ -38,14 +40,14 @@ routine tipo, cosa compra davvero nella categoria, cosa guarda su Instagram o Fa
 cosa lo infastidisce), un paio di abitudini o contraddizioni normali. Scrivi in terza persona, in italiano semplice.
 Non inventare salute, religione, politica, orientamento, origine etnica, né marchi o negozi reali, né prezzi o importi nei testi.
 Le persone di una stessa richiesta devono essere molto diverse tra loro: nomi, mestieri e aperture delle schede non si ripetono, e non riutilizzare quelli già usati.
-In echo_* ripeti esattamente i fatti ricevuti. budget_eur_month è la spesa mensile discrezionale per la categoria, coerente con il reddito.
+budget_eur_month è quanto spende al mese solo per i prodotti di questa categoria: di solito poche decine di euro, mai più di qualche centinaio.
+Non nominare le piattaforme che la persona non usa e non scrivere cifre di denaro nei testi.
 Rispondi solo con il JSON dello schema, con una scheda per ogni persona (ref P1, P2, ...)."""
 
 SENSITIVE = re.compile(
-    r"\b(malatt\w+|depressi\w+|cancro|tumor\w+|diabet\w+|disabil\w+|invalid\w+|terapi\w+|psicolog\w+|"
-    r"cattolic\w+|musulman\w+|ebre\w+|religios\w+|chiesa|preghier\w+|parrocchi\w+|"
-    r"gay|lesbic\w+|omosessual\w+|eterosessual\w+|bisessual\w+|transgender|"
-    r"politic\w+|elezion\w+|partito|immigrat\w+|stranier\w+)\b",
+    r"\b(malatt\w+|depressi\w+|cancro|tumor\w+|diabet\w+|disabil\w+|"
+    r"cattolic\w+|musulman\w+|ebre[oaie]\b|religios\w+|chiesa|preghier\w+|parrocchi\w+|"
+    r"gay|lesbic\w+|omosessual\w+|eterosessual\w+|bisessual\w+|transgender|politic\w+)\b",
     re.I,
 )
 BRANDS = re.compile(
@@ -54,7 +56,7 @@ BRANDS = re.compile(
     r"l'oreal|loreal|vichy|la roche|kiko|tiktok|netflix|google|youtube|whatsapp|shein|vinted)\b",
     re.I,
 )
-PRICE = re.compile(r"€|\beuro\b|\beur\b|\d\s?(?:€|euro)", re.I)
+PRICE = re.compile(r"\d[\d.,]*\s?(?:€|euro\b|eur\b)|€\s?\d", re.I)
 NEGATION = re.compile(r"\b(non|senza|nessun\w*|né|mai|niente)\b", re.I)
 PET_WORDS = {
     "dog": re.compile(r"\b(cane|cani|cagnolin\w*|cucciol\w*)\b", re.I),
@@ -173,6 +175,13 @@ def describe_profile(profile):
         f"Usa {' e '.join(platforms)} da {device}, circa {profile['social_minutes_per_day']} minuti al giorno"
         + (" e a volte dal computer." if profile["desktop_user"] else ".")
     )
+    unused = [
+        n
+        for n, on in (("Instagram", profile["uses_instagram"]), ("Facebook", profile["uses_facebook"]))
+        if not on
+    ]
+    if unused:
+        facts.append(f"Non usa {unused[0]}.")
     tendencies = [
         _level(
             profile["budget_sensitivity"],
@@ -222,61 +231,86 @@ def describe_profile(profile):
     return facts
 
 
+CLAUSE = re.compile(r"[.;!?\n,:]|\s(?:ma|però|mentre|anche se)\s", re.I)
+ECHO_FIELDS = {
+    "echo_age": "age",
+    "echo_gender": "gender",
+    "echo_household": "household",
+    "echo_has_children": "has_children",
+    "echo_pet_species": "pet_species",
+    "echo_device_os": "device_os",
+}
+# A fact the card leaves out is not a contradiction: the facts reach the reaction prompt anyway (``card["facts"]``).
+# An omission blocks a card only where the attribute is what the category is about.
+OMISSIONS = {"animale_mancante", "figli_mancanti", "piattaforma_mancante"}
+CENTRAL = {"pet_ecommerce": {"animale_mancante"}}
+
+
+def _find(text, pattern):
+    """The first clause where ``pattern`` appears without a negation in the same clause, or None.
+
+    «Instagram non lo usa» and «non usa Instagram» are both negated; «non esce mai, ma ha un cane» is not."""
+    for clause in CLAUSE.split(text):
+        if pattern.search(clause) and not NEGATION.search(clause):
+            return clause.strip()
+    return None
+
+
 def _mentions(text, pattern):
-    """True when ``pattern`` appears at least once without a negation earlier in the same sentence."""
-    for sentence in re.split(r"[.;!?\n]", text):
-        for match in pattern.finditer(sentence):
-            if not NEGATION.search(sentence[: match.start()][-30:]):
-                return True
-    return False
+    return _find(text, pattern) is not None
 
 
-def validate_card(card, profile, forbidden=()):
-    """Problems found when comparing the card with its skeleton (empty list = acceptable)."""
+def card_problems(card, profile, forbidden=(), details=None):
+    """Everything found when comparing the card with its skeleton, contradictions and omissions alike.
+
+    ``details`` (a dict) receives the offending clause for the problems that have one."""
     problems = []
-    echoes = {
-        "echo_age": profile["age"],
-        "echo_gender": profile["gender"],
-        "echo_household": profile["household"],
-        "echo_has_children": profile["has_children"],
-        "echo_pet_species": profile["pet_species"],
-        "echo_device_os": profile["device_os"],
-    }
-    for field, expected in echoes.items():
-        if getattr(card, field) != expected:
+    details = {} if details is None else details
+
+    def flag(code, clause=None):
+        problems.append(code)
+        if clause:
+            details.setdefault(code, clause[:160])
+
+    for field, source in ECHO_FIELDS.items():
+        if getattr(card, field) != profile[source]:
             problems.append(f"fatto_cambiato:{field}")
     text = " ".join(
         [card.job, card.city, *(getattr(card, f) for f in TEXT_FIELDS), *card.pain_points, *card.quirks]
     )
     if any(int(m.group(1)) != profile["age"] for m in AGE_IN_TEXT.finditer(text)):
         problems.append("eta_incoerente")
-    if SENSITIVE.search(text):
-        problems.append("attributo_sensibile")
-    if BRANDS.search(text) or any(re.search(rf"\b{re.escape(b)}\b", text, re.I) for b in forbidden if b):
-        problems.append("marchio_reale")
-    if PRICE.search(text):
-        problems.append("prezzo_nel_testo")
+    for code, pattern in (
+        ("attributo_sensibile", SENSITIVE),
+        ("marchio_reale", BRANDS),
+        ("prezzo_nel_testo", PRICE),
+    ):
+        match = pattern.search(text)
+        if match:
+            flag(code, match.group(0))
+    if any(re.search(rf"\b{re.escape(b)}\b", text, re.I) for b in forbidden if b):
+        flag("marchio_reale")
     species = profile["pet_species"]
     for kind, pattern in PET_WORDS.items():
-        present = _mentions(text, pattern)
-        if kind == species and not present:
-            problems.append("animale_mancante")
-        if kind != species and present:
-            problems.append("animale_incoerente")
+        clause = _find(text, pattern)
+        if kind == species and not clause:
+            flag("animale_mancante")
+        if kind != species and clause:
+            flag("animale_incoerente", clause)
     household = profile["household"]
-    if household == "alone" and ALONE_FORBIDDEN.search(text):
-        problems.append("nucleo_incoerente")
+    if household == "alone" and _mentions(text, ALONE_FORBIDDEN):
+        flag("nucleo_incoerente", _find(text, ALONE_FORBIDDEN))
     if household != "alone" and NOT_ALONE_FORBIDDEN.search(text):
-        problems.append("nucleo_incoerente")
-    has_children = _mentions(text, CHILD_WORDS)
-    if profile["has_children"] == "yes" and not has_children:
-        problems.append("figli_mancanti")
-    if profile["has_children"] == "no" and has_children:
-        problems.append("figli_incoerenti")
+        flag("nucleo_incoerente", NOT_ALONE_FORBIDDEN.search(text).group(0))
+    children = _find(text, CHILD_WORDS)
+    if profile["has_children"] == "yes" and not children:
+        flag("figli_mancanti")
+    if profile["has_children"] == "no" and children:
+        flag("figli_incoerenti", children)
     for platform, used in (("instagram", profile["uses_instagram"]), ("facebook", profile["uses_facebook"])):
         pattern = re.compile(platform, re.I)
         if not used and _mentions(text, pattern):
-            problems.append(f"piattaforma_non_usata:{platform}")
+            flag(f"piattaforma_non_usata:{platform}", _find(text, pattern))
         if (
             used
             and not pattern.search(card.social_habits)
@@ -293,6 +327,21 @@ def validate_card(card, profile, forbidden=()):
     if card.budget_eur_month > BUDGET_CAP[profile["income_band"]]:
         problems.append("budget_incoerente")
     return sorted(set(problems))
+
+
+def _blocking(problem, vertical):
+    code = problem.split(":")[0]
+    return code not in OMISSIONS or code in CENTRAL.get(vertical, ())
+
+
+def validate_card(card, profile, forbidden=(), vertical=None, details=None):
+    """What makes the card unacceptable (empty list = acceptable): contradictions, and omissions central to the category."""
+    return [p for p in card_problems(card, profile, forbidden, details) if _blocking(p, vertical)]
+
+
+def card_omissions(card, profile, vertical=None):
+    """Facts the card does not mention and that do not block it. Reported, never hidden."""
+    return [p for p in card_problems(card, profile) if not _blocking(p, vertical)]
 
 
 def _tokens(text):
@@ -346,9 +395,58 @@ def template_card(profile, ordinal):
     }
 
 
+HINTS = {
+    "prezzo_nel_testo": "non scrivere cifre di denaro nei testi",
+    "attributo_sensibile": "non parlare di salute, religione, politica o orientamento",
+    "marchio_reale": "non nominare marchi o negozi reali",
+    "animale_incoerente": "non attribuirle animali diversi da quello indicato nei fatti",
+    "animale_mancante": "nomina l'animale indicato nei fatti",
+    "nucleo_incoerente": "rispetta con chi vive, come indicato nei fatti",
+    "figli_mancanti": "nomina i figli indicati nei fatti",
+    "figli_incoerenti": "non attribuirle figli: i fatti dicono che non ne ha",
+    "eta_incoerente": "non scrivere l'età nei testi",
+    "occupazione_incoerente": "rispetta l'occupazione indicata nei fatti",
+    "budget_incoerente": "budget_eur_month deve essere più basso, coerente con il reddito",
+    "nome_duplicato": "scegli un nome diverso da quelli già usati",
+    "apertura_duplicata": "comincia la bio in modo diverso",
+    "bio_simile": "scrivi una bio diversa dalle altre",
+    "scheda_mancante": "compila tutti i campi rispettando le lunghezze",
+}
+
+
+def hints_for(problems, details=None):
+    """What to tell the model about a rejected card, so the retry is not a blind second draw."""
+    out = []
+    for problem in problems:
+        code = problem.split(":")[0]
+        quoted = (details or {}).get(problem)
+        if quoted:
+            out.append(f"avevi scritto «{quoted}»")
+        if code == "fatto_cambiato":
+            out.append("ripeti esattamente i fatti nei campi echo")
+        elif code == "piattaforma_non_usata":
+            out.append("non nominare le piattaforme che non usa")
+        elif code == "piattaforma_mancante":
+            out.append("in social_habits nomina la piattaforma che usa")
+        elif code in HINTS:
+            out.append(HINTS[code])
+    return list(dict.fromkeys(out))
+
+
+def strip_fences(raw):
+    """Some local models wrap the JSON in a Markdown code fence even under a schema constraint."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    return text
+
+
 def batch_schema(count):
+    """The schema the model fills. The ``echo_*`` facts are not asked for: the code knows them and writes them."""
     card = PersonaCard.model_json_schema()
     card.pop("title", None)
+    card["properties"] = {k: v for k, v in card["properties"].items() if k not in ECHO_FIELDS}
+    card["required"] = [k for k in card["required"] if k not in ECHO_FIELDS]
     card["properties"]["ref"] = {"type": "string", "enum": [f"P{i + 1}" for i in range(count)]}
     return {
         "type": "object",
@@ -358,7 +456,7 @@ def batch_schema(count):
     }
 
 
-def user_prompt(profiles, vertical, used):
+def user_prompt(profiles, vertical, used, corrections=None):
     lines = [f"Categoria di riferimento: {VERTICAL_LABELS[vertical]}."]
     if used["names"] or used["jobs"] or used["openings"]:
         lines.append(
@@ -373,15 +471,21 @@ def user_prompt(profiles, vertical, used):
     lines.append("Persone da scrivere:")
     for index, profile in enumerate(profiles, 1):
         lines.append(f"P{index}\n" + "\n".join(f"- {fact}" for fact in describe_profile(profile)))
+        previous = (corrections or {}).get(profile["agent_id"]) or ([], {})
+        hints = hints_for(*previous)
+        if hints:
+            lines.append("Correggi rispetto alla versione precedente: " + "; ".join(hints) + ".")
     return "\n".join(lines)
 
 
 class PersonaWriter:
-    def __init__(self, repo, client, digest, vertical, country="IT", brand="", batch_size=BATCH_SIZE):
+    def __init__(self, repo, client, digest, vertical, country="IT", brand="", batch_size=None):
         self.repo, self.client, self.digest = repo, client, digest or "unknown-runtime"
         self.vertical, self.country, self.brand = vertical, country, brand
-        self.batch_size = batch_size
+        self.batch_size = batch_size or getattr(client, "card_batch_size", BATCH_SIZE)
         self.system = SYSTEM_PROMPT.format(country=COUNTRY_NAMES.get(country, country))
+        self.rejected_samples = []  # the rejected texts, kept for diagnosis only (never stored with the run)
+        self.timings = []
 
     def key(self, profile):
         return policy_key(
@@ -398,39 +502,45 @@ class PersonaWriter:
             }
         )
 
-    def _call(self, group, used, attempt):
+    def _call(self, group, used, attempt, corrections=None):
         schema = batch_schema(len(group))
         seed = stable_seed(
             self.vertical, self.country, PERSONA_PROMPT_VERSION, attempt, *(p["agent_id"] for p in group)
         )
         result = self.client.generate(
             self.system,
-            user_prompt(group, self.vertical, used),
+            user_prompt(group, self.vertical, used, corrections),
             schema,
             temperature=0.9,
             seed=seed % 2**31,
             max_tokens=700 * len(group) + 200,
         )
-        data = json.loads(result["raw"])
+        data = json.loads(strip_fences(result["raw"]))
         cards = {}
+        refs = {f"P{i + 1}": profile for i, profile in enumerate(group)}
         for item in data["cards"]:
             try:
-                card = PersonaCard.model_validate(item)
+                profile = refs.get(item.get("ref")) if isinstance(item, dict) else None
+                if profile is None:
+                    continue
+                card = PersonaCard.model_validate(
+                    {**item, **{field: profile[source] for field, source in ECHO_FIELDS.items()}}
+                )
             except ValidationError:
                 continue  # that person is reported as missing and retried
             if card.ref in {f"P{i + 1}" for i in range(len(group))}:
                 cards[card.ref] = card
         return cards, result
 
-    def write(self, profiles):
-        """Cards for every profile: ``{agent_id: card_dict}`` plus a report. Quota errors propagate; cache keeps progress."""
+    def write(self, profiles, progress=None):
+        """``progress(done, total)`` is called after every batch. Cards for every profile: ``{agent_id: card_dict}`` plus a report. Quota errors propagate; cache keeps progress."""
         if any("household" not in p for p in profiles):
             raise ValueError(
                 "Le schede richiedono un pannello mirato (targeting): profili senza attributi di vita"
             )
         start = time.monotonic()
         stats = {"calls": 0, "tokens": 0, "prompt_tokens": 0, "attempts": 0, "written": 0}
-        rejected = Counter()
+        rejected, omitted = Counter(), Counter()
         cards, pending = {}, []
         for profile in profiles:
             key = self.key(profile)
@@ -444,6 +554,7 @@ class PersonaWriter:
         accepted = [c for c in cards.values() if c["source"] == "llm"]
         for card in accepted:
             self._remember(used, card)
+        corrections = {}
         for attempt in range(MAX_ATTEMPTS):
             if not pending:
                 break
@@ -452,34 +563,58 @@ class PersonaWriter:
                 group = pending[offset : offset + self.batch_size]
                 profiles_group = [p for p, _ in group]
                 try:
-                    written, result = self._call(profiles_group, used, attempt)
-                except CloudQuotaError:
+                    written, result = self._call(profiles_group, used, attempt, corrections)
+                except (CloudRuntimeError, httpx.ConnectError):
+                    # Quota, auth and provider failures stop the run: writing template cards would hide them.
                     raise
-                except (ValueError, KeyError, ValidationError, json.JSONDecodeError) as exc:
+                except (ValueError, KeyError, ValidationError, json.JSONDecodeError, httpx.HTTPError) as exc:
+                    # A timeout or a malformed answer costs one attempt for these people; it never fails the run.
                     rejected[f"risposta_non_valida:{type(exc).__name__}"] += len(group)
                     failed.extend(group)
                     continue
                 stats["calls"] += 1
+                self.timings.append(
+                    {
+                        k: result.get(k)
+                        for k in ("seconds", "prompt_tokens", "tokens", "prompt_seconds", "output_seconds")
+                    }
+                )
                 stats["tokens"] += result.get("tokens", 0)
                 stats["prompt_tokens"] += result.get("prompt_tokens", 0)
                 for index, (profile, key) in enumerate(group, 1):
                     stats["attempts"] += 1
                     card = written.get(f"P{index}")
+                    details = {}
                     problems = (
-                        ["scheda_mancante"] if card is None else validate_card(card, profile, [self.brand])
+                        ["scheda_mancante"]
+                        if card is None
+                        else validate_card(card, profile, [self.brand], self.vertical, details)
                     )
                     if card is not None and not problems:
                         duplicate = duplicate_problem(card, accepted)
                         problems = [duplicate] if duplicate else []
                     if problems:
+                        if len(self.rejected_samples) < SAMPLE_LIMIT:
+                            self.rejected_samples.append(
+                                {
+                                    "agent_id": profile["agent_id"],
+                                    "attempt": attempt,
+                                    "problems": problems,
+                                    "card": card.model_dump() if card else None,
+                                }
+                            )
                         rejected.update(problems)
+                        corrections[profile["agent_id"]] = (problems, details)
                         failed.append((profile, key))
                         continue
+                    omitted.update(card_omissions(card, profile, self.vertical))
                     stored = self._store(key, profile, card.model_dump(), "llm", result, attempt)
                     stats["written"] += 1
                     cards[profile["agent_id"]] = stored
                     accepted.append(stored)
                     self._remember(used, stored)
+                if progress:
+                    progress(len(cards), len(profiles))
             pending = failed
         for ordinal, (profile, key) in enumerate(pending, 1):
             cards[profile["agent_id"]] = self._store(
@@ -495,6 +630,7 @@ class PersonaWriter:
             "written_by_llm": stats["written"],
             "template_fallback": sources["template"],
             "rejected_reasons": dict(rejected),
+            "accepted_with_omissions": dict(omitted),
             "seconds": round(time.monotonic() - start, 2),
             **stats,
             "evidence": "hypothesis",

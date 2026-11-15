@@ -192,3 +192,45 @@ Il benchmark B2 con persone e prompt v8 (Fase 8) resta da eseguire su dev.
   età, placement, nucleo, animale, genere, reddito, zona, telefono e target ideale, con i gruppi sotto 8 persone segnati;
   la galleria delle persone con scheda, reazione in prima persona e ripartizione su 100 volte; «Quanto sono credibili le
   reazioni» con i segnali dei controlli automatici e il download della rubrica cieca e della sua chiave (due file separati).
+
+## Prova reale e «più dati» (15 novembre 2026)
+
+**Guasto corretto.** Con il modello locale la modalità «Persone simulate» falliva con `ReadTimeout`: un lotto di 8 schede
+richiede circa 5 minuti a ~17 token/s, oltre il timeout di 180 s. Ora Ollama scrive 2 schede per richiesta con timeout di
+900 s, un timeout costa un tentativo e non fa fallire la run, l'avanzamento delle schede è visibile, e al modello viene detto
+cosa correggere quando una scheda è respinta. Il validatore aveva falsi positivi (la parola «euro», «partito», «terapia»,
+piattaforme citate in negativo): corretti. Su `qwen3.5:9b` le schede accettate sono passate da 2 su 4 a 9 su 10.
+
+**Tempi misurati in locale (qwen3.5:9b):** circa 35 s per scheda e 27–50 s per reazione. 120 persone × 2 creatività × 3 slot
+sono molte ore: in locale conviene 60 persone e la sola prima visione, oppure un modello online.
+
+**Confronto di varianti del prompt** (`scripts/live_prompt_check.py`, 10 persone, dati sintetici, stesso annuncio):
+
+| Variante | Attenzione media | Click su 100 | Incoerenze |
+|---|---:|---:|---:|
+| v8 | 33% | 3,3 | 10% |
+| v8 senza esempi | 25% | 2,8 | 11% |
+| v8 con richiamo alle abitudini reali | 14% | 1,7 | 33% |
+
+Il richiamo abbassa l'attenzione di 18 punti (intervallo appaiato da −26 a −8), il click non in modo distinguibile, e triplica
+le incoerenze. Con 9–10 esposizioni e nessun dato reale di riferimento non c'è base per dire quale livello sia giusto:
+**v8 resta il default**, la variante `v8_base_rate` resta disponibile in `prompt_eval.VARIANTS`.
+
+**Più dati rendono il sistema più affidabile?** (`learning_curve.py`, solo split dev di Upworthy, fold per campagna e per
+titolo condiviso; il test congelato non è stato letto.)
+
+| Modello addestrabile | 5% dei dati | 25% | 100% (581 campagne) | 100% + 748 campagne extra |
+|---|---:|---:|---:|---:|
+| B0 (7 caratteristiche) | 57,3% | 57,3% | 59,3% | 60,1% |
+| Testo ricco (n-grammi) | 58,1% | 61,6% | 65,4% | 67,3% |
+
+- Un modello con capacità migliora con i dati: +3,8 punti dal 25% al 100% (p = 0,01); l'aggiunta delle 748 campagne extra
+  porta altri +1,9 punti, non distinguibili dal caso (p = 0,13). B0 satura subito.
+- Il modello a testo ricco batte B0 di 7,3 punti (p < 0,001): è la soglia che il pannello di agenti deve superare su questo
+  dominio. Non l'ho inserito nei criteri pre-registrati di PROMISE: è una decisione tua.
+- **Il modello linguistico dietro gli agenti non viene addestrato da questo progetto**: più campagne non lo cambiano. I dati
+  migliorano solo ciò che gli si addestra attorno (baseline di testo, calibrazione) e solo nel dominio dei dati: titoli di news
+  in inglese, non annunci ecommerce in italiano. Per quel dominio servono risultati di campagne reali tue.
+- Fonti cercate e non adottate: nessun dataset pubblico di annunci a pagamento con testo, impression e click per variante;
+  «KAG conversion data» (Facebook, 1.143 righe) ha licenza non verificabile e interessi anonimizzati; Upworthy confirmatory
+  resta escluso per i diritti d'uso. Nessun file nuovo è stato scaricato.

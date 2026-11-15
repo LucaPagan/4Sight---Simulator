@@ -3,7 +3,7 @@ import type {SimulationRun, Prediction, ConsumerProfile, TargetingSpec} from "./
 
 export type Mode = "history_forecast" | "agent_native";
 export type Slot = "first" | "repeat" | "saturated";
-export type Run = SimulationRun & {mode?: Mode; slots?: Slot[] | null};
+export type Run = SimulationRun & {mode?: Mode; slots?: Slot[] | null; persona_cards_done?: number; persona_cards_total?: number};
 
 // Editable form drafts; API submission validates the generated CampaignBrief contract.
 export type Creative = {id: string; headline: string; primary_text: string; visual_description: string; cta: string; lever: string; format: string; claim_verified: boolean; offer?: string; price_text?: string; landing_page_summary?: string};

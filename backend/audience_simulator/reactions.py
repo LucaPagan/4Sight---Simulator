@@ -1,4 +1,4 @@
-"""Stage 3: a persona reacts to an ad as seen. Prompt ``agent-reaction-v8``, schema ``AgentDecision``.
+"""Stage 3: a persona reacts to an ad as seen. Prompt ``agent-reaction-v8.1``, schema ``AgentDecision``.
 
 The model plays one person (the persona card plus facts), in one situation, looking at the ad the way a feed shows it:
 first the glance, then, only if they stop, the rest. It answers how many times out of 100 it would skip, stop, engage
@@ -17,7 +17,7 @@ from .context import calendar_regime
 from .schemas import AgentDecision, CampaignBrief
 from .stimulus_view import SLOTS, exposure_placement, situation, stimulus
 
-REACTION_PROMPT_VERSION = "agent-reaction-v8"
+REACTION_PROMPT_VERSION = "agent-reaction-v8.1"
 
 EVIDENCE = [
     "ad.visual",
@@ -154,14 +154,22 @@ def example_order(view):
     return list(np.random.default_rng(seed).permutation(len(EXAMPLES)))
 
 
-def build_prompt(payload):
-    """(system, user) for one reaction. The persona is written second-person, the ad as it appears in the feed."""
+def build_prompt(payload, examples=True):
+    """(system, user) for one reaction. The persona is written second-person, the ad as it appears in the feed.
+
+    Order matters for speed: examples and persona come first and the ad last, so consecutive calls for the same
+    person share a long prefix that a local runtime does not have to read again."""
     view = reaction_view(payload)
     persona, ad, now = view["persona"], view["ad"], view["situation"]
     facts = "\n".join(f"- {f}" for f in persona["fatti"])
     habits = "; ".join(persona["abitudini"]) or "nessuna in particolare"
     annoyances = "; ".join(persona["fastidi"]) or "nessuno in particolare"
+    shape = "ESEMPI DI FORMA (altri settori e altre persone: non copiare i valori)\n" + "\n".join(
+        f"- {e['settore']} · {e['chi']} · {e['annuncio']} → {json.dumps(e['risposta'], ensure_ascii=False)}"
+        for e in (EXAMPLES[i] for i in example_order(view))
+    )
     parts = [
+        *([shape] if examples else []),
         f"CHI SEI\nTi chiami {persona['nome']}, vivi a {persona['citta']}. Mestiere: {persona['mestiere']}.\n"
         "Qui sotto c'è la tua scheda, scritta in terza persona: la persona descritta sei tu.\n"
         f"Fatti sulla tua persona (non negoziabili):\n{facts}\n"
@@ -181,11 +189,6 @@ def build_prompt(payload):
             f"Se cliccassi troveresti (non lo sai prima di cliccare):\n{_lines(ad['dopo_il_click'])}"
             if ad["dopo_il_click"]
             else "Dopo il click non hai informazioni sulla pagina di destinazione."
-        ),
-        "ESEMPI DI FORMA (altri settori e altre persone: non copiare i valori)\n"
-        + "\n".join(
-            f"- {e['settore']} · {e['chi']} · {e['annuncio']} → {json.dumps(e['risposta'], ensure_ascii=False)}"
-            for e in (EXAMPLES[i] for i in example_order(view))
         ),
         "Rispondi come questa persona con il JSON dello schema.",
     ]
@@ -215,7 +218,10 @@ def normalize_per_100(values):
 
 
 def validate_decision(raw):
-    decision = AgentDecision.model_validate_json(raw)
+    text = raw.strip()
+    if text.startswith("```"):  # some local models fence the JSON even under a schema constraint
+        text = text.strip("`").removeprefix("json").strip()
+    decision = AgentDecision.model_validate_json(text)
     unknown = [e for e in decision.evidence if e not in EVIDENCE]
     if unknown:
         raise ValueError("evidence non consentita: " + ", ".join(unknown))
@@ -273,10 +279,11 @@ def reaction_plan(
         }
     )
     work = []
-    for creative in brief.creatives:
+    # Person first, creative last: consecutive prompts differ only in their tail (see ``build_prompt``).
+    for profile in profiles:
         for regime in regimes:
             for slot in slots:
-                for profile in profiles:
+                for creative in brief.creatives:
                     card = cards.get(profile["agent_id"])
                     if card is None:
                         raise ValueError("Mancano le schede-persona: scrivile prima di simulare le reazioni")
@@ -306,7 +313,7 @@ def reaction_plan(
     return work
 
 
-def decide(client, payload, build=None, temperature=0.7):
+def decide(client, payload, build=None, temperature=0.7, attempt=0):
     """One reaction through any provider's structured ``generate``. ``build`` and ``temperature`` serve prompt variants."""
     system, user = (build or build_prompt)(payload)
     result = client.generate(
@@ -314,7 +321,8 @@ def decide(client, payload, build=None, temperature=0.7):
         user,
         decision_schema(),
         temperature=temperature,
-        seed=stable_seed(policy_key(payload)) % 2**31,
+        # A retry must not replay the same draw: the attempt number moves the seed.
+        seed=stable_seed(policy_key(payload), attempt) % 2**31,
         max_tokens=700,
     )
     decision, normalized = validate_decision(result["raw"])

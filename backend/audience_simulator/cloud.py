@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import re
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -63,11 +64,61 @@ class CloudRuntimeError(ValueError):
 
 
 class CloudQuotaError(CloudRuntimeError):
-    def __init__(self, retry_after_seconds=None, provider="Gemini"):
+    def __init__(self, retry_after_seconds=None, provider="Gemini", detail=""):
         self.retry_after_seconds = retry_after_seconds
-        super().__init__(
-            f"Quota {provider} esaurita o limite temporaneo: controlla la console del provider e riprendi più tardi. Le policy salvate restano disponibili; nessun fallback a pagamento."
+        wait = (
+            f" Riprova tra circa {max(1, round(retry_after_seconds / 60))} minuti."
+            if retry_after_seconds
+            else ""
         )
+        super().__init__(
+            f"Quota {provider} esaurita o limite temporaneo: controlla la console del provider e riprendi più tardi.{wait} Le policy salvate restano disponibili; nessun fallback a pagamento."
+            + (f" Messaggio del provider: {detail}" if detail else "")
+        )
+
+
+RETRY_DELAYS = (4, 12)  # seconds before the second and third attempt of a generation hit by a passing failure
+TRANSIENT_STATUS = {500, 502, 503, 504}
+
+
+def provider_message(response, limit=220):
+    """The provider's own error text, shortened. Never contains the request (so no key and no prompt)."""
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    error = data.get("error") or (data.get("errors") or [{}])[0]
+    text = error.get("message", "") if isinstance(error, dict) else str(error)
+    return " ".join(text.split())[:limit]
+
+
+def retry_seconds(text):
+    """«Please retry in 38m5s» -> 2285. None when the provider gives no wait."""
+    match = re.search(r"retry in\s+(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", text or "", re.I)
+    if not match or not any(match.groups()):
+        return None
+    hours, minutes, seconds = (float(g) if g else 0.0 for g in match.groups())
+    total = hours * 3600 + minutes * 60 + seconds
+    return total if 0 < total < 86401 else None
+
+
+def post_with_retry(http, url, body, sleep=time.sleep):
+    """POST that survives a passing overload or timeout. Quota and auth errors are returned at once for ``_check``."""
+    for delay in (*RETRY_DELAYS, None):
+        try:
+            response = http.post(url, json=body)
+        except httpx.TimeoutException:
+            if delay is None:
+                raise CloudRuntimeError(
+                    "Il provider non ha risposto in tempo per tre volte. Riprendi la run tra qualche minuto."
+                ) from None
+            sleep(delay)
+            continue
+        if response.status_code in TRANSIENT_STATUS and delay is not None:
+            sleep(delay)
+            continue
+        return response
+    raise AssertionError("unreachable")
 
 
 class CloudRateLimiter:
@@ -152,14 +203,17 @@ class GeminiClient:
                     retry = None
             except ValueError:
                 retry = None
-            raise CloudQuotaError(retry)
+            detail = provider_message(response)
+            raise CloudQuotaError(retry or retry_seconds(detail), detail=detail)
         if response.status_code in (401, 403):
             raise CloudRuntimeError(
                 "Chiave Gemini non valida o progetto non autorizzato. Verifica chiave e permessi in AI Studio."
             )
         if response.is_error:
+            detail = provider_message(response)
             raise CloudRuntimeError(
                 f"Gemini ha restituito HTTP {response.status_code}. Verifica disponibilità del modello e configurazione; nessun provider alternativo è stato chiamato."
+                + (f" Messaggio del provider: {detail}" if detail else "")
             )
 
     def _text(self, data):
@@ -179,9 +233,10 @@ class GeminiClient:
             raise CloudRuntimeError(self.status()["error"])
         pacing = self.limiter.pace()
         start = time.monotonic()
-        response = self.http.post(
+        response = post_with_retry(
+            self.http,
             "/v1beta/interactions",
-            json={
+            {
                 "model": self.model,
                 "system_instruction": system,
                 "input": user,

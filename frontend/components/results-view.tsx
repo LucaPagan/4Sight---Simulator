@@ -182,7 +182,7 @@ export function ResultsView({runId}: {runId: string}) {
         <section className="progress" aria-label="Avanzamento">
           <div className="progress-line"><span>{inProgress && PHASE_LABEL[run.phase] ? PHASE_LABEL[run.phase] : STATUS_LABEL[run.status] || run.status}</span><b className="num">{fmt(run.progress)}%</b></div>
           <div className="bar" role="progressbar" aria-valuenow={run.progress} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${run.progress}%`}} /></div>
-          <p className="muted">{fmt(run.completed_policies)} di {run.required_policies ? fmt(run.required_policies) : "…"} {native ? "reazioni" : "valutazioni"}. La pagina si aggiorna da sola.</p>
+          <p className="muted">{native && run.phase === "personas" ? `${fmt(run.persona_cards_done ?? 0)} di ${run.persona_cards_total ? fmt(run.persona_cards_total) : "…"} schede scritte` : `${fmt(run.completed_policies)} di ${run.required_policies ? fmt(run.required_policies) : "…"} ${native ? "reazioni" : "valutazioni"}`}. La pagina si aggiorna da sola.</p>
           {run.error && <p className="warn">{run.error}</p>}
           <div className="row">
             {isRunResumable(run) && <button className="button secondary" onClick={() => post(`/simulations/${run.id}/resume`)} disabled={!!busy}><RefreshCw size={18} aria-hidden="true" /> Riprendi dove si era fermata</button>}

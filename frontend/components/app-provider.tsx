@@ -103,6 +103,23 @@ export function AppProvider({children}: {children: ReactNode}) {
   }, [runtimeChoice.provider, runtimeChoice.model]);
 
   useEffect(() => {refresh();}, [refresh]);
+  // Se un modello online è già configurato, parte da quello: è molto più veloce di quello locale.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      for (const provider of ["gemini", "cloudflare"] as const) {
+        try {
+          const config = await api<{configured: boolean; free_tier_confirmed: boolean; models: {id: string}[]}>(`/runtime/config?provider=${provider}`);
+          if (!live) return;
+          if (config.configured && config.free_tier_confirmed) {
+            setRuntimeChoice(current => (current.provider === "ollama" && !current.model ? {provider, model: config.models[0]?.id ?? ""} : current));
+            return;
+          }
+        } catch {/* senza configurazione resta il modello locale */}
+      }
+    })();
+    return () => {live = false;};
+  }, []);
   useEffect(() => {api<Catalog>("/targeting/catalog").then(setCatalog).catch(() => {});}, []);
   const reloadAssets = useCallback(() => {api<Asset[]>("/assets").then(setAssets).catch(() => {});}, []);
   useEffect(() => reloadAssets(), [reloadAssets]);

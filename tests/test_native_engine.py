@@ -130,7 +130,7 @@ def test_agent_decisions_are_the_ctr_and_the_forecast_is_only_a_reference(servic
     _, run = run_native(service, agent)
     result = result_of(service, run)
     assert result["mode"] == "agent_native" and result["quantitative_source"] == "agent_native_decisions"
-    assert result["validated"] is False and result["model"]["prompt_version"] == "agent-reaction-v8"
+    assert result["validated"] is False and result["model"]["prompt_version"] == "agent-reaction-v8.1"
     for row in result["predictions"]:
         assert row["ctr_pred"] == pytest.approx(8.0)  # every reached persona says 8 clicks per 100
         assert row["expected_clicks"] == pytest.approx(row["expected_impressions"] * 0.08)

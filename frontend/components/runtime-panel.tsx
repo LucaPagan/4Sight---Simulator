@@ -12,7 +12,17 @@ const MODELS = {
 };
 
 export function RuntimeSelector({value, onChange}: {value: RuntimeChoice; onChange: (value: RuntimeChoice)=>void}) {
-  return <div className="form-grid"><label>Motore degli agenti<select value={value.provider} onChange={e=>{const provider=e.target.value as RuntimeChoice["provider"];onChange({provider,model:provider==="ollama"?"":MODELS[provider][0].id});}}><option value="ollama">Locale · Ollama</option><option value="gemini">Cloud · Google Gemini</option><option value="cloudflare">Cloud · Cloudflare Workers Free</option></select></label>{value.provider!=="ollama"&&<label>Modello cloud<select value={value.model} onChange={e=>onChange({...value,model:e.target.value})}>{MODELS[value.provider].map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>}</div>;
+  const [localModel, setLocalModel] = useState("Caricamento…");
+  useEffect(() => {
+    if (value.provider !== "ollama") return;
+    let stopped = false;
+    setLocalModel("Caricamento…");
+    api<{selected_model: string}>("/runtime/status?provider=ollama").then(status => {
+      if (!stopped) setLocalModel(status.selected_model);
+    }).catch(() => {if (!stopped) setLocalModel("Non disponibile");});
+    return () => {stopped = true;};
+  }, [value.provider]);
+  return <div className="form-grid"><label>Motore degli agenti<select value={value.provider} onChange={e=>{const provider=e.target.value as RuntimeChoice["provider"];onChange({provider,model:provider==="ollama"?"":MODELS[provider][0].id});}}><option value="ollama">Locale · Ollama</option><option value="gemini">Cloud · Google Gemini</option><option value="cloudflare">Cloud · Cloudflare Workers Free</option></select></label>{value.provider==="ollama"&&<label>Modello locale<input readOnly value={localModel}/></label>}{value.provider!=="ollama"&&<label>Modello cloud<select value={value.model} onChange={e=>onChange({...value,model:e.target.value})}>{MODELS[value.provider].map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>}</div>;
 }
 
 export function RuntimePanel({selection, onChange, onSaved}: {selection: RuntimeChoice; onChange: (value:RuntimeChoice)=>void; onSaved: ()=>void}) {

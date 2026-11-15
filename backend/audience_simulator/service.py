@@ -356,9 +356,9 @@ class SimulationService:
                 record = stored["result"]
             else:
                 record = None
-                for _ in range(2):
+                for retry in range(2):
                     try:
-                        record = decide(client, item["input"])
+                        record = decide(client, item["input"], attempt=retry)
                         break
                     except CloudQuotaError:
                         raise
@@ -429,7 +429,7 @@ class SimulationService:
             }
             required, cached = len(profiles) * len(brief.creatives) * len(regimes) * len(slots), 0
         new = required - cached
-        card_calls = -(-cards_missing // BATCH_SIZE)
+        card_calls = -(-cards_missing // getattr(client, "card_batch_size", BATCH_SIZE))
         return {
             "mode": "agent_native",
             "runtime": runtime,
@@ -979,8 +979,17 @@ class SimulationService:
                 writer = PersonaWriter(
                     self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
                 )
+
+                def card_progress(done, total):
+                    self.repo.update_run(
+                        run_id,
+                        persona_cards_done=done,
+                        persona_cards_total=total,
+                        progress=3 + int(7 * done / total),
+                    )
+
                 try:
-                    cards, persona_report = writer.write(profiles)
+                    cards, persona_report = writer.write(profiles, progress=card_progress)
                 except CloudQuotaError as exc:
                     pause("waiting_for_capacity", str(exc), retry_after_seconds=exc.retry_after_seconds)
                     return
@@ -1019,12 +1028,12 @@ class SimulationService:
                     )
                     return
                 last_error = None
-                for _ in range(2):
+                for retry in range(3):
                     if attempts >= self.cfg.max_evaluations:
                         break
                     attempts += 1
                     try:
-                        record = decide(client, item["input"])
+                        record = decide(client, item["input"], attempt=retry)
                         self.repo.save_decision(item["key"], {"digest": runtime["digest"], "result": record})
                         decisions[item["key"]] = record
                         last_error = None

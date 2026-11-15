@@ -30,14 +30,27 @@ class Variant:
 
 
 def build_without_examples(payload):
+    return build_prompt(payload, examples=False)
+
+
+BASE_RATE_REMINDER = (
+    "COME USI DAVVERO I SOCIAL\nIn una sessione ti passano davanti decine di post sponsorizzati e quasi tutti li scorri senza "
+    "fermarti; aprirne uno è raro, anche quando l'argomento ti riguarda. Rispondi per come ti comporti davvero, non per come "
+    "saresti se prestassi attenzione a ogni annuncio.\n\n"
+)
+
+
+def build_with_base_rate(payload):
+    """v8 plus a reminder of ordinary scrolling behaviour, placed right before the closing instruction. No numbers."""
     system, user = build_prompt(payload)
-    start, end = user.index(EXAMPLES_MARK), user.index(CLOSING_MARK)
-    return system, user[:start] + user[end:]
+    end = user.index(CLOSING_MARK)
+    return system, user[:end] + BASE_RATE_REMINDER + user[end:]
 
 
 VARIANTS = {
     "v8": Variant("v8", build_prompt),
     "v8_no_examples": Variant("v8_no_examples", build_without_examples),
+    "v8_base_rate": Variant("v8_base_rate", build_with_base_rate),
     "v8_temperature_0": Variant("v8_temperature_0", build_prompt, 0.0),
     "v8_temperature_1": Variant("v8_temperature_1", build_prompt, 1.0),
 }

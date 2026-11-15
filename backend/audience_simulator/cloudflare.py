@@ -7,7 +7,13 @@ import time
 import httpx
 
 from .agents import evaluation_schema, validate_evaluation
-from .cloud import CloudQuotaError, CloudRateLimiter, CloudRuntimeError
+from .cloud import (
+    CloudQuotaError,
+    CloudRateLimiter,
+    CloudRuntimeError,
+    post_with_retry,
+    provider_message,
+)
 from .prompts import PROMPT_VERSION, SYSTEM_PROMPT, model_view
 
 CLOUDFLARE_MODELS = {
@@ -72,14 +78,16 @@ class CloudflareClient:
 
     def _check(self, response):
         if response.status_code in (429, 402):
-            raise CloudQuotaError(provider="Cloudflare")
+            raise CloudQuotaError(provider="Cloudflare", detail=provider_message(response))
         if response.status_code in (401, 403):
             raise CloudRuntimeError(
                 "Token Cloudflare o permessi Workers AI non validi. Verifica anche Account ID e piano Free."
             )
         if response.is_error:
+            detail = provider_message(response)
             raise CloudRuntimeError(
                 f"Cloudflare ha restituito HTTP {response.status_code}. Verifica modello, quota e configurazione; nessun fallback è stato chiamato."
+                + (f" Messaggio del provider: {detail}" if detail else "")
             )
 
     def generate(self, system, user, schema, *, temperature=0.9, seed=None, max_tokens=4096):
@@ -103,7 +111,9 @@ class CloudflareClient:
         }
         if seed is not None:
             body["seed"] = seed
-        response = self.http.post(f"/client/v4/accounts/{self.account_id}/ai/v1/chat/completions", json=body)
+        response = post_with_retry(
+            self.http, f"/client/v4/accounts/{self.account_id}/ai/v1/chat/completions", body
+        )
         self._check(response)
         response.raise_for_status()
         data = response.json()
