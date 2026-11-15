@@ -891,6 +891,123 @@
     "title": "Prediction",
     "type": "object"
   },
+  "NativePerformance": {
+    "additionalProperties": true,
+    "properties": {
+      "cards": {
+        "$ref": "#/$defs/StagePerformance"
+      },
+      "reactions": {
+        "$ref": "#/$defs/StagePerformance"
+      },
+      "writer_version": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Writer Version"
+      },
+      "reaction_prompt_version": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Reaction Prompt Version"
+      },
+      "concurrency": {
+        "default": 1,
+        "maximum": 4,
+        "minimum": 1,
+        "title": "Concurrency",
+        "type": "integer"
+      }
+    },
+    "title": "NativePerformance",
+    "type": "object"
+  },
+  "StagePerformance": {
+    "additionalProperties": true,
+    "properties": {
+      "calls": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Calls",
+        "type": "integer"
+      },
+      "attempts": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Attempts",
+        "type": "integer"
+      },
+      "rejected": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Rejected",
+        "type": "integer"
+      },
+      "corrections": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Corrections",
+        "type": "integer"
+      },
+      "errors": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Errors",
+        "type": "integer"
+      },
+      "cache_hits": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Cache Hits",
+        "type": "integer"
+      },
+      "fallback": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Fallback",
+        "type": "integer"
+      },
+      "tokens": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Tokens",
+        "type": "integer"
+      },
+      "prompt_tokens": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Prompt Tokens",
+        "type": "integer"
+      },
+      "seconds": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Seconds",
+        "type": "number"
+      },
+      "pacing_seconds": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Pacing Seconds",
+        "type": "number"
+      }
+    },
+    "title": "StagePerformance",
+    "type": "object"
+  },
   "SimulationRun": {
     "additionalProperties": true,
     "properties": {
@@ -1002,6 +1119,17 @@
         ],
         "default": null,
         "title": "Requested Model"
+      },
+      "performance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NativePerformance"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       }
     },
     "required": [

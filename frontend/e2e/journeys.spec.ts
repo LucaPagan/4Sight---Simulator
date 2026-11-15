@@ -234,3 +234,22 @@ test("simulated-people results fit a phone", async ({page}) => {
   await page.getByText("Impostazioni come in Ads Manager").click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 });
+
+test("native persona progress shows attempts and rejects without hiding provider errors", async ({page}) => {
+  const running = {...run, status: "running", completion_status: "partial", phase: "personas", mode: "agent_native", progress: 4, completed_policies: 0, required_policies: 720, persona_cards_done: 2, persona_cards_total: 120,
+    error: "Quota temporanea: riprendi più tardi", performance: {cards: {attempts: 18, rejected: 16, cache_hits: 0}, reactions: {cache_hits: 0}}};
+  await mockApi(page, [running], {completion_status: "preliminary"}, {run: running});
+  await page.goto("/results/run-0001");
+  await expect(page.getByText(/2 di 120 schede/)).toBeVisible();
+  await expect(page.getByText(/18 tentativi.*16 scarti/)).toBeVisible();
+  await expect(page.getByText(running.error)).toBeVisible();
+});
+
+test("native reaction progress shows cached reactions and supports historical runs", async ({page}) => {
+  const running = {...run, status: "running", completion_status: "partial", phase: "agents", mode: "agent_native", progress: 20, completed_policies: 30, required_policies: 720,
+    performance: {cards: {}, reactions: {cache_hits: 12}}};
+  await mockApi(page, [running], {completion_status: "preliminary"}, {run: running});
+  await page.goto("/results/run-0001");
+  await expect(page.getByText(/30 di 720 reazioni/)).toBeVisible();
+  await expect(page.getByText(/12.*cache/)).toBeVisible();
+});

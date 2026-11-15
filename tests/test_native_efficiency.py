@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from audience_simulator.persona_cards import PersonaWriter, user_prompt
 from audience_simulator.repository import Repository
 from test_persona_cards import FakeWriter, targeted, writer
@@ -111,3 +112,131 @@ def test_occupation_patch_is_revalidated_and_uses_only_three_attempts(tmp_path):
     assert report["corrections"] == 1 and report["attempts"] == 3
     assert report["rejected_reasons"]["marchio_reale"] == 1
     assert report["template_fallback"] == 1
+
+
+def test_materialized_cards_do_not_bypass_runtime_compatibility(tmp_path):
+    from pathlib import Path
+
+    from audience_simulator.config import Settings
+    from audience_simulator.service import SimulationService
+    from test_native_engine import PAYLOAD, FakeAgent
+
+    svc = SimulationService(
+        Settings(
+            database_url=f"sqlite:///{tmp_path}/db",
+            artifact_dir=tmp_path / "art",
+            data_dir=Path("data"),
+            queue_mode="manual",
+            monte_carlo_draws=20,
+        )
+    )
+    scenario = svc.create_scenario(PAYLOAD)
+    old = FakeAgent()
+    svc.write_personas(scenario["id"], client=old)
+    changed = FakeAgent()
+    changed.model = "another-model"
+    run = svc.repo.create_run(
+        scenario["id"], "new-model", {"provider": "fake", "mode": "agent_native", "slots": ["first"]}
+    )
+    svc.execute_run(run["id"], client=changed)
+    assert changed.writer.calls
+    final = svc.repo.get("simulation_runs", run["id"])
+    assert final["completion_status"] == "complete"
+    assert final["performance"]["cards"]["calls"] > 0
+    assert final["performance"]["reactions"]["calls"] == 60
+
+
+def test_cancel_during_personas_stops_after_current_batch_and_preserves_progress(tmp_path):
+    from pathlib import Path
+
+    from audience_simulator.config import Settings
+    from audience_simulator.service import SimulationService
+    from test_native_engine import PAYLOAD, FakeAgent
+
+    svc = SimulationService(
+        Settings(
+            database_url=f"sqlite:///{tmp_path}/db",
+            artifact_dir=tmp_path / "art",
+            data_dir=Path("data"),
+            queue_mode="manual",
+            monte_carlo_draws=20,
+        )
+    )
+    scenario = svc.create_scenario(PAYLOAD)
+    run = svc.repo.create_run(
+        scenario["id"], "cancel-cards", {"provider": "fake", "mode": "agent_native", "slots": ["first"]}
+    )
+
+    class Cancel(FakeAgent):
+        def generate(self, *args, **kwargs):
+            result = super().generate(*args, **kwargs)
+            svc.repo.update_run(run["id"], status="canceled", phase="canceled")
+            return result
+
+    client = Cancel()
+    svc.execute_run(run["id"], client=client)
+    final = svc.repo.get("simulation_runs", run["id"])
+    assert final["status"] == "canceled" and final["phase"] == "canceled"
+    assert len(client.writer.calls) == 1 and client.reactions == 0
+    assert final["performance"]["cards"]["calls"] == 1
+    assert svc.repo.list("persona_cards")
+
+
+def test_performance_contract_is_optional_and_preserves_typed_counters():
+    from audience_simulator.contracts import SimulationRun
+
+    base = dict(
+        id="r",
+        scenario_id="s",
+        status="running",
+        phase="personas",
+        completion_status="partial",
+        progress=3,
+        completed_policies=0,
+        required_policies=720,
+    )
+    assert SimulationRun(**base).performance is None
+    record = SimulationRun(**base, performance={"cards": {"attempts": 4, "rejected": 2}})
+    assert record.performance.cards.attempts == 4
+    with pytest.raises(ValueError):
+        SimulationRun(**base, performance={"cards": {"calls": -1}})
+
+
+def test_full_120_person_native_run_resumes_only_missing_reactions(tmp_path):
+    from pathlib import Path
+
+    from audience_simulator.config import Settings
+    from audience_simulator.service import SimulationService
+    from test_native_engine import PAYLOAD, FakeAgent
+
+    cfg = Settings(
+        database_url=f"sqlite:///{tmp_path}/db",
+        artifact_dir=tmp_path / "art",
+        data_dir=Path("data"),
+        queue_mode="manual",
+        monte_carlo_draws=20,
+        max_evaluations=5,
+        ollama_reaction_concurrency=2,
+    )
+    svc = SimulationService(cfg)
+    scenario = svc.create_scenario({**PAYLOAD, "population_size": 120})
+    run = svc.repo.create_run(
+        scenario["id"],
+        "120-resume",
+        {"provider": "ollama", "mode": "agent_native", "slots": ["first", "repeat", "saturated"]},
+    )
+    first = FakeAgent()
+    first.provider = "ollama"
+    svc.execute_run(run["id"], first)
+    paused = svc.repo.get("simulation_runs", run["id"])
+    assert paused["status"] == "waiting_for_capacity" and paused["completed_policies"] == 5
+    cfg.max_evaluations = 1000
+    second = FakeAgent()
+    second.provider = "ollama"
+    svc.execute_run(run["id"], second)
+    final = svc.repo.get("simulation_runs", run["id"])
+    assert final["completion_status"] == "complete" and final["completed_policies"] == 720
+    assert second.reactions == 715 and not second.writer.calls
+    assert final["performance"]["reactions"]["calls"] == 720
+    assert final["performance"]["reactions"]["cache_hits"] == 5
+    assert len(svc.result(run["id"])["profiles"]) == 120

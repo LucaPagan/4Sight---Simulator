@@ -491,6 +491,8 @@ def user_prompt(profiles, vertical, used, corrections=None):
 
 
 class PersonaWriter:
+    version = PERSONA_PROMPT_VERSION
+
     def __init__(self, repo, client, digest, vertical, country="IT", brand="", batch_size=None):
         self.repo, self.client, self.digest = repo, client, digest or "unknown-runtime"
         self.vertical, self.country, self.brand = vertical, country, brand

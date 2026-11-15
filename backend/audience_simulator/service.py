@@ -23,9 +23,11 @@ from .domain import Domain, assess_domain
 from .evidence import ASSUMPTIONS, EVIDENCE
 from .forecasting import forecast, forecast_new_campaign, train_model_registry, validate_models
 from .native_engine import simulate_agent_native
+from .performance import stage_metrics
 from .persona_cards import BATCH_SIZE, PersonaWriter
 from .persona_model import generate_targeted_population
-from .reactions import REACTION_PROMPT_VERSION, decide, reaction_plan
+from .reaction_execution import run_reaction_plan
+from .reactions import REACTION_PROMPT_VERSION, reaction_plan
 from .reporting import audit_predictions, build_report, compare_predictions
 from .repository import ArtifactStore, Repository
 from .schemas import CampaignBrief, ReachSummary, TargetingAnalyzeRequest
@@ -322,9 +324,16 @@ class SimulationService:
         writer = PersonaWriter(
             self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
         )
-        cards, report = writer.write(population["profiles"])
+        state = population.get("writer_state", {})
+
+        def checkpoint(done, total):
+            self.repo.replace("populations", population["id"], {**population, "writer_state": state})
+
+        cards, report = writer.write(population["profiles"], progress=checkpoint, state=state)
         self.repo.replace(
-            "populations", population["id"], {**population, "cards": cards, "persona_report": report}
+            "populations",
+            population["id"],
+            {**population, "cards": cards, "persona_report": report, "writer_state": state},
         )
         return {"population_id": population["id"], "cards": cards, "report": report}
 
@@ -344,38 +353,42 @@ class SimulationService:
         runtime = client.status()
         if not runtime["ready"]:
             raise ValueError(runtime.get("error") or "Runtime non pronto")
+        writer = PersonaWriter(
+            self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
+        )
+        if not all(
+            writer.compatible(population["cards"].get(p["agent_id"], {}), p) for p in population["profiles"]
+        ):
+            self.write_personas(scenario_id, client=client)
+            population = self.repo.get("populations", scenario["population_id"])
         plan = reaction_plan(
             brief, population["profiles"], population["cards"], runtime["digest"], slots=tuple(slots)
         )
         selected = plan[:limit] if limit else plan
-        decisions, failed, cached, answered = [], 0, 0, []
-        for item in selected:
-            stored = self.repo.get_decision(item["key"])
-            if stored:
-                cached += 1
-                record = stored["result"]
-            else:
-                record = None
-                for retry in range(2):
-                    try:
-                        record = decide(client, item["input"], attempt=retry)
-                        break
-                    except CloudQuotaError:
-                        raise
-                    except (ValueError, KeyError, json.JSONDecodeError, httpx.HTTPError):
-                        continue
-                if record is None:
-                    failed += 1
-                    continue
-                self.repo.save_decision(item["key"], {"digest": runtime["digest"], "result": record})
-            answered.append(item)
-            decisions.append(
-                {k: item[k] for k in ("agent_id", "creative_id", "slot", "regime", "placement")}
-                | {"result": record}
-            )
+        execution = run_reaction_plan(
+            self.repo,
+            client,
+            selected,
+            runtime["digest"],
+            concurrency=self.cfg.ollama_reaction_concurrency if client.provider == "ollama" else 1,
+            max_attempts=2,
+            max_evaluations=self.cfg.max_evaluations,
+            stop_on_invalid=False,
+        )
+        if execution["error"]:
+            raise execution["error"]
+        answered = [item for item in selected if item["key"] in execution["decisions"]]
+        decisions = [
+            {k: item[k] for k in ("agent_id", "creative_id", "slot", "regime", "placement")}
+            | {"result": execution["decisions"][item["key"]]}
+            for item in answered
+        ]
+        failed = len(execution["failed"])
+        cached = execution["performance"]["cache_hits"]
         return {
             "required": len(plan),
             "evaluated": len(selected),
+            "performance": execution["performance"],
             "from_cache": cached,
             "failed": failed,
             "summary": reaction_summary(decisions),
@@ -409,13 +422,18 @@ class SimulationService:
         runtime = client.status()
         digest = runtime["digest"] or "pending-runtime"
         writer = PersonaWriter(self.repo, client, digest, brief.vertical, brief.country, brief.brand)
-        cards_missing = (
-            0
-            if population.get("cards")
-            else sum(not (runtime["ready"] and self.repo.get_card(writer.key(p))) for p in profiles)
-        )
-        if population.get("cards"):
-            plan = reaction_plan(brief, profiles, population["cards"], digest, slots=tuple(slots))
+        compatible = {}
+        accepted = []
+        for profile in profiles:
+            stored = self.repo.get_card(writer.key(profile)) if runtime["ready"] else None
+            card = stored["card"] if stored else {}
+            if writer.compatible(card, profile, accepted):
+                compatible[profile["agent_id"]] = card
+                if card["source"] == "llm":
+                    accepted.append(card)
+        cards_missing = len(profiles) - len(compatible)
+        if not cards_missing:
+            plan = reaction_plan(brief, profiles, compatible, digest, slots=tuple(slots))
             required = len(plan)
             cached = sum(bool(self.repo.get_decision(p["key"])) for p in plan) if runtime["ready"] else 0
         else:
@@ -430,6 +448,35 @@ class SimulationService:
             required, cached = len(profiles) * len(brief.creatives) * len(regimes) * len(slots), 0
         new = required - cached
         card_calls = -(-cards_missing // getattr(client, "card_batch_size", BATCH_SIZE))
+        timings = [
+            r
+            for r in self.repo.list("simulation_runs", 200)
+            if r.get("completion_status") == "complete"
+            and r.get("mode") == "agent_native"
+            and r.get("model_digest") == digest
+            and r.get("performance", {}).get("reaction_prompt_version") == REACTION_PROMPT_VERSION
+            and r.get("performance", {}).get("writer_version") == writer.version
+            and r.get("performance", {}).get("concurrency")
+            == (self.cfg.ollama_reaction_concurrency if provider == "ollama" else 1)
+        ]
+        estimate = None
+        if len(timings) >= 3:
+            import statistics
+
+            card_rates = [
+                r["performance"]["cards"]["seconds"] / r["performance"]["cards"]["attempts"]
+                for r in timings
+                if r["performance"].get("cards", {}).get("attempts", 0)
+            ]
+            reaction_rates = [
+                r["performance"]["reactions"]["seconds"] / r["performance"]["reactions"]["attempts"]
+                for r in timings
+                if r["performance"].get("reactions", {}).get("attempts", 0)
+            ]
+            if (not cards_missing or len(card_rates) >= 3) and (not new or len(reaction_rates) >= 3):
+                estimate = (statistics.median(card_rates) * cards_missing if cards_missing else 0) + (
+                    statistics.median(reaction_rates) * new if new else 0
+                )
         return {
             "mode": "agent_native",
             "runtime": runtime,
@@ -438,15 +485,13 @@ class SimulationService:
             "new_policies": new,
             "persona_cards_to_write": cards_missing,
             "persona_card_calls": card_calls,
-            "max_attempts_with_retry": 2 * new + 3 * card_calls,
-            "within_limit": 2 * new <= self.cfg.max_evaluations,
-            "estimated_seconds": (new + card_calls) * client.interval
-            if hasattr(client, "interval")
-            else None,
-            "timing_observations": 0,
-            "estimate_note": "Stima dal solo limite di richieste al minuto del provider; esclude retry e latenza."
-            if hasattr(client, "interval")
-            else "Durata non stimabile per questo runtime.",
+            "max_attempts_with_retry": 3 * new + 3 * cards_missing,
+            "within_limit": 3 * new <= self.cfg.max_evaluations,
+            "estimated_seconds": estimate,
+            "timing_observations": len(timings),
+            "estimate_note": "Stima da run compatibili; retry e carico possono cambiare la durata."
+            if estimate is not None
+            else "Misure compatibili insufficienti per stimare la durata.",
             "population_size": len(profiles),
             "slots": list(slots),
             "model": client.model,
@@ -974,35 +1019,56 @@ class SimulationService:
                     phase="agents",
                 )
                 return
-            if not population.get("cards"):
-                self.repo.update_run(run_id, phase="personas", progress=8, model_digest=runtime["digest"])
-                writer = PersonaWriter(
-                    self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
+            performance = run.get("performance") or {}
+            performance.update(
+                writer_version=PersonaWriter.version,
+                reaction_prompt_version=REACTION_PROMPT_VERSION,
+                concurrency=self.cfg.ollama_reaction_concurrency if client.provider == "ollama" else 1,
+            )
+            performance.setdefault("cards", stage_metrics())
+            performance.setdefault("reactions", stage_metrics())
+            self.repo.update_run(
+                run_id, phase="personas", progress=max(run["progress"], 8), model_digest=runtime["digest"]
+            )
+            writer = PersonaWriter(
+                self.repo, client, runtime["digest"], brief.vertical, brief.country, brief.brand
+            )
+            state = population.get("writer_state", {})
+
+            def card_progress(done, total):
+                performance["cards"] = dict(writer.performance)
+                self.repo.replace("populations", population["id"], {**population, "writer_state": state})
+                if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
+                    self.repo.update_run(run_id, performance=performance)
+                    raise InterruptedError("Simulazione annullata")
+                self.repo.update_run(
+                    run_id,
+                    persona_cards_done=done,
+                    persona_cards_total=total,
+                    progress=max(run["progress"], 3 + int(7 * done / total)),
+                    performance=performance,
                 )
 
-                def card_progress(done, total):
-                    self.repo.update_run(
-                        run_id,
-                        persona_cards_done=done,
-                        persona_cards_total=total,
-                        progress=3 + int(7 * done / total),
-                    )
-
-                try:
-                    cards, persona_report = writer.write(profiles, progress=card_progress)
-                except CloudQuotaError as exc:
-                    pause("waiting_for_capacity", str(exc), retry_after_seconds=exc.retry_after_seconds)
-                    return
-                except CloudRuntimeError as exc:
-                    pause("waiting_for_runtime", str(exc))
-                    return
-                except httpx.ConnectError:
-                    pause(
-                        "waiting_for_runtime", "Runtime disconnesso; le schede salvate restano disponibili."
-                    )
-                    return
-                population = {**population, "cards": cards, "persona_report": persona_report}
-                self.repo.replace("populations", population["id"], population)
+            try:
+                cards, persona_report = writer.write(
+                    profiles, progress=card_progress, performance=performance["cards"], state=state
+                )
+            except CloudQuotaError as exc:
+                pause("waiting_for_capacity", str(exc), retry_after_seconds=exc.retry_after_seconds)
+                return
+            except CloudRuntimeError as exc:
+                pause("waiting_for_runtime", str(exc))
+                return
+            except httpx.ConnectError:
+                pause("waiting_for_runtime", "Runtime disconnesso; le schede salvate restano disponibili.")
+                return
+            population = {
+                **population,
+                "cards": cards,
+                "persona_report": persona_report,
+                "writer_state": state,
+            }
+            self.repo.replace("populations", population["id"], population)
             plan = reaction_plan(brief, profiles, population["cards"], runtime["digest"], slots=slots)
             self.repo.update_run(
                 run_id,
@@ -1012,62 +1078,47 @@ class SimulationService:
                 completion_status="partial",
                 phase="agents",
             )
-            decisions, attempts = {}, 0
-            for item in plan:
+
+            def reaction_progress(completed, metrics):
+                performance["reactions"] = dict(metrics)
                 if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
-                    return
-                cached = self.repo.get_decision(item["key"])
-                if cached:
-                    decisions[item["key"]] = cached["result"]
-                    continue
-                if attempts >= self.cfg.max_evaluations:
+                    self.repo.update_run(run_id, performance=performance)
+                else:
+                    self.repo.update_run(
+                        run_id,
+                        completed_policies=len(completed),
+                        progress=max(run["progress"], 10 + int(70 * len(completed) / len(plan))),
+                        performance=performance,
+                    )
+
+            execution = run_reaction_plan(
+                self.repo,
+                client,
+                plan,
+                runtime["digest"],
+                concurrency=performance["concurrency"],
+                max_evaluations=self.cfg.max_evaluations,
+                performance=performance["reactions"],
+                progress=reaction_progress,
+                canceled=lambda: self.repo.get("simulation_runs", run_id)["status"] == "canceled",
+            )
+            decisions = execution["decisions"]
+            if execution["canceled"]:
+                return
+            exc = execution["error"]
+            if exc:
+                if isinstance(exc, CloudQuotaError):
                     pause(
                         "waiting_for_capacity",
-                        "Limite valutazioni raggiunto. Riprendi per completare le reazioni mancanti.",
+                        str(exc),
+                        retry_after_seconds=exc.retry_after_seconds,
                         completed_policies=len(decisions),
                     )
-                    return
-                last_error = None
-                for retry in range(3):
-                    if attempts >= self.cfg.max_evaluations:
-                        break
-                    attempts += 1
-                    try:
-                        record = decide(client, item["input"], attempt=retry)
-                        self.repo.save_decision(item["key"], {"digest": runtime["digest"], "result": record})
-                        decisions[item["key"]] = record
-                        last_error = None
-                        break
-                    except CloudQuotaError as exc:
-                        pause(
-                            "waiting_for_capacity",
-                            str(exc),
-                            retry_after_seconds=exc.retry_after_seconds,
-                            completed_policies=len(decisions),
-                        )
-                        return
-                    except CloudRuntimeError as exc:
-                        pause("waiting_for_runtime", str(exc), completed_policies=len(decisions))
-                        return
-                    except httpx.ConnectError:
-                        pause(
-                            "waiting_for_runtime",
-                            "Runtime disconnesso; le reazioni salvate restano disponibili.",
-                            completed_policies=len(decisions),
-                        )
-                        return
-                    except (httpx.HTTPError, ValueError, KeyError) as exc:
-                        last_error = (
-                            f"Reazione {item['agent_id']}/{item['creative_id']}: {type(exc).__name__}"
-                        )
-                if last_error:
-                    pause("waiting_for_capacity", last_error, completed_policies=len(decisions))
-                    return
-                self.repo.update_run(
-                    run_id,
-                    completed_policies=len(decisions),
-                    progress=10 + int(70 * len(decisions) / len(plan)),
-                )
+                elif isinstance(exc, (CloudRuntimeError, httpx.ConnectError)):
+                    pause("waiting_for_runtime", str(exc), completed_policies=len(decisions))
+                else:
+                    pause("waiting_for_capacity", str(exc), completed_policies=len(decisions))
+                return
             if len(decisions) != len(plan):
                 raise ValueError("Copertura panel incompleta")
             self.repo.update_run(run_id, completed_policies=len(decisions), phase="behavior", progress=85)
@@ -1096,6 +1147,7 @@ class SimulationService:
                 "profiles": profiles,
                 "cards": population["cards"],
                 "persona_report": population.get("persona_report"),
+                "performance": performance,
                 "predictions": predictions,
                 "behavior": behavior,
                 "comparison": comparison,
@@ -1139,6 +1191,8 @@ class SimulationService:
             }
             self._publish(run_id, result, predictions, behavior, report)
         except Exception as exc:
+            if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
+                return
             self.repo.update_run(
                 run_id, status="failed", phase="error", error=f"{type(exc).__name__}: {str(exc)[:300]}"
             )

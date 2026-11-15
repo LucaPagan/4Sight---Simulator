@@ -1954,6 +1954,48 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "NativePerformance": {
+        "properties": {
+          "cards": {
+            "$ref": "#/components/schemas/StagePerformance"
+          },
+          "reactions": {
+            "$ref": "#/components/schemas/StagePerformance"
+          },
+          "writer_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writer Version"
+          },
+          "reaction_prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reaction Prompt Version"
+          },
+          "concurrency": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Concurrency",
+            "default": 1
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "NativePerformance"
+      },
       "Prediction": {
         "properties": {
           "ad_id": {
@@ -2442,6 +2484,16 @@
               }
             ],
             "title": "Requested Model"
+          },
+          "performance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NativePerformance"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": true,
@@ -2457,6 +2509,79 @@
           "required_policies"
         ],
         "title": "SimulationRun"
+      },
+      "StagePerformance": {
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Calls",
+            "default": 0
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Attempts",
+            "default": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Rejected",
+            "default": 0
+          },
+          "corrections": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Corrections",
+            "default": 0
+          },
+          "errors": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Errors",
+            "default": 0
+          },
+          "cache_hits": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cache Hits",
+            "default": 0
+          },
+          "fallback": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fallback",
+            "default": 0
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Tokens",
+            "default": 0
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "default": 0
+          },
+          "seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Seconds",
+            "default": 0
+          },
+          "pacing_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Pacing Seconds",
+            "default": 0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "StagePerformance"
       },
       "TargetingAnalyzeRequest": {
         "properties": {

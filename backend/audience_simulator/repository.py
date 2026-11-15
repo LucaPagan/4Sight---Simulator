@@ -220,7 +220,7 @@ class Repository:
         statement = update(table).where(
             table.c.id == run_id, table.c.payload["completion_status"].as_string() != "complete"
         )
-        if changes.get("status") != "queued":
+        if changes.get("status") != "queued" and set(changes) != {"performance"}:
             statement = statement.where(table.c.payload["status"].as_string() != "canceled")
         with self.connection() as conn:
             conn.execute(
