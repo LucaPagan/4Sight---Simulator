@@ -6,10 +6,10 @@ Goal: more valid native results per minute without reducing 120 personas, creati
 Constraints: existing providers, manual selection, no new dependencies, validation and resumability retained.
 
 ## Incremental tasks
-- [ ] Instrumentation and isolated resumable native benchmark (20 profiles, two creatives, three slots).
-- [ ] Explicit persona constraints, bounded partial repair and validated cache/provenance.
-- [ ] Persistent performance contracts and UI progress, compatible materialized cards.
-- [ ] Bounded local reaction concurrency with coordinator-owned persistence and cancellation.
+- [x] Instrumentation and isolated resumable native benchmark (20 profiles, two creatives, three slots).
+- [x] Explicit persona constraints, bounded partial repair and validated cache/provenance.
+- [x] Persistent performance contracts and UI progress, compatible materialized cards.
+- [x] Bounded local reaction concurrency with coordinator-owned persistence and cancellation.
 - [ ] Full tests, frontend verification, benchmark/rubric artifacts and independent review.
 
 Each increment uses regression tests before implementation and is committed after verification.
