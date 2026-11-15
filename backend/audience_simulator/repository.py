@@ -220,7 +220,10 @@ class Repository:
         statement = update(table).where(
             table.c.id == run_id, table.c.payload["completion_status"].as_string() != "complete"
         )
-        if changes.get("status") != "queued" and set(changes) != {"performance"}:
+        if set(changes) == {"performance"}:
+            # A metrics-only checkpoint must not restore a status changed by cancellation/resume.
+            statement = statement.where(table.c.payload["status"].as_string() == current["status"])
+        elif changes.get("status") != "queued":
             statement = statement.where(table.c.payload["status"].as_string() != "canceled")
         with self.connection() as conn:
             conn.execute(

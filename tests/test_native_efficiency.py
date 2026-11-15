@@ -289,3 +289,24 @@ def test_native_estimate_includes_failed_attempts_per_valid_result(tmp_path):
         )
     preflight = svc.native_preflight(scenario["id"], FakeAgent(), "fake", ("first",))
     assert preflight["estimated_seconds"] == 2700  # 30 new cards + 60 new reactions, retries included
+
+
+def test_performance_checkpoint_cannot_undo_concurrent_cancel(tmp_path, monkeypatch):
+    repo = Repository(f"sqlite:///{tmp_path}/db")
+    scenario = repo.create("scenarios", {"brief": {}})
+    run = repo.create_run(scenario["id"], "cancel-race")
+    repo.claim_run(run["id"])
+    original = repo.get
+    pending = True
+
+    def cancel_after_read(kind, key):
+        nonlocal pending
+        value = original(kind, key)
+        if kind == "simulation_runs" and pending:
+            pending = False
+            repo.update_run(key, status="canceled", phase="canceled")
+        return value
+
+    monkeypatch.setattr(repo, "get", cancel_after_read)
+    repo.update_run(run["id"], performance={"cards": {"calls": 1}})
+    assert original("simulation_runs", run["id"])["status"] == "canceled"
