@@ -14,6 +14,7 @@ import numpy as np
 
 from .audience import stable_seed
 from .context import calendar_regime
+from .creative_quality import panel_flags
 from .decision_quality import assess_decisions
 from .schemas import AGES
 from .stimulus_view import SLOTS
@@ -360,6 +361,7 @@ def _behavior(brief, profiles, plan, decisions, predictions, arrays, weights, ev
         "raw_panel": summaries,
         "policy_findings": findings,
         "policy_quality": decision_diagnostics(records),
+        "creative_flags": panel_flags(records),
         "reaction_quality": assess_decisions(
             [
                 {

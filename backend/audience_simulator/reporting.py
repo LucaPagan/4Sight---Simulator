@@ -161,7 +161,9 @@ def input_gaps(brief):
     return gaps
 
 
-def build_report(brief, predictions, behavior, comparison, coverage, panel_calibration=None, native=None):
+def build_report(
+    brief, predictions, behavior, comparison, coverage, panel_calibration=None, native=None, checks=None
+):
     applied = bool(panel_calibration and panel_calibration.get("applied"))
     diagnoses = []
     for creative in brief.creatives:
@@ -229,6 +231,7 @@ def build_report(brief, predictions, behavior, comparison, coverage, panel_calib
             "Intervalli condizionati a modello, policy e prior",
             "Ablation panel non ancora dimostrata: forecast aggregato baseline",
         ],
+        "creative_checks": checks or [],
         "stop_go": {
             "agent_coverage": coverage["completed"] == coverage["required"],
             "age_math": True,
@@ -271,4 +274,7 @@ def build_report(brief, predictions, behavior, comparison, coverage, panel_calib
         ]
         report["stop_go"]["age_mode"] = "agent_native"
         report["native"] = native
+    warnings = [c["message"] for c in checks or [] if c.get("message")]
+    if warnings:
+        report["limitations"] = [*warnings, *report["limitations"]]
     return report

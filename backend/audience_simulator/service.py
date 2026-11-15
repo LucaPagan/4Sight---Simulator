@@ -16,6 +16,13 @@ from .cloud import CloudQuotaError, CloudRuntimeError, GeminiClient, credentials
 from .cloudflare import CloudflareClient
 from .config import Settings
 from .counterfactual import run_counterfactuals
+from .creative_quality import (
+    annotate_comparison,
+    audit_creative,
+    audit_shifts,
+    creative_checks,
+    panel_flags,
+)
 from .datasets import audit_dataset, load_dataset
 from .decision_quality import assess_decisions
 from .decision_quality import export_rubric as export_decision_rubric
@@ -800,7 +807,19 @@ class SimulationService:
             "reason": "Spostamento relativo calibrato su campagne escluse.",
         }
 
-    def predict_brief(self, brief, signal_effects=None, ctr_shifts=None):
+    def audit_creatives(self, brief, client=None, digest=None, use_model=True):
+        """Neutral audit of each creative. A runtime that fails or is out of quota leaves the rule-based result."""
+        audits = []
+        for creative in brief.creatives:
+            try:
+                audits.append(audit_creative(client, brief, creative, self.repo, digest, use_model))
+            except (CloudQuotaError, CloudRuntimeError, httpx.HTTPError) as exc:
+                fallback = audit_creative(client, brief, creative, use_model=False)
+                fallback["unavailable_reason"] = f"revisione non disponibile: {type(exc).__name__}"
+                audits.append(fallback)
+        return audits
+
+    def predict_brief(self, brief, signal_effects=None, ctr_shifts=None, audit_shifts=None):
         kit, frame = self.rows_for_brief(brief)
         predictions, draws = forecast_new_campaign(
             kit, self.get_models(), frame, seed=brief.seed, n_draws=self.cfg.monte_carlo_draws
@@ -835,6 +854,8 @@ class SimulationService:
                 r["assumptions"].append("market_context_ratio_unvalidated")
         if ctr_shifts:
             apply_ctr_shifts(predictions, draws, ctr_shifts)
+        if audit_shifts:
+            apply_ctr_shifts(predictions, draws, audit_shifts, assumption="creative_audit_ctr_shift")
         ages = age_predictions(
             draws,
             brief.seed,
@@ -889,7 +910,8 @@ class SimulationService:
             self.repo.update_run(
                 run_id, status="running", phase="baseline", progress=max(run["progress"], 3), error=None
             )
-            predictions, draws = self.predict_brief(brief)
+            rule_audits = self.audit_creatives(brief, use_model=False)
+            predictions, draws = self.predict_brief(brief, audit_shifts=audit_shifts(rule_audits))
             self.store.write_json(
                 f"runs/{run_id}.preliminary.json",
                 {
@@ -1014,7 +1036,9 @@ class SimulationService:
                 getattr(client, "model", None),
             )
             shifts, panel_calibration = self.panel_calibration(brief, plan, policies, assessment)
-            predictions, draws = self.predict_brief(brief, signals, shifts)
+            audits = self.audit_creatives(brief, client, runtime["digest"])
+            audit_applied = any(a["shift_logit"] for a in audits)
+            predictions, draws = self.predict_brief(brief, signals, shifts, audit_shifts(audits))
             behavior = simulate_panel(brief, profiles, policies, plan, predictions)
             comparison = compare_predictions(predictions, draws, assessment)
             coverage = {
@@ -1023,7 +1047,18 @@ class SimulationService:
                 "ratio": 1.0,
                 "profiles": len(profiles),
             }
-            report = build_report(brief, predictions, behavior, comparison, coverage, panel_calibration)
+            flags = panel_flags(
+                [
+                    {"creative_id": p["creative_id"], "decision": policies[p["key"]]}
+                    for p in plan
+                    if p["key"] in policies
+                ]
+            )
+            checks = creative_checks(brief, audits, flags)
+            annotate_comparison(comparison, checks)
+            report = build_report(
+                brief, predictions, behavior, comparison, coverage, panel_calibration, checks=checks
+            )
             audit_predictions(predictions, brief.daily_adset_budget_eur)
             if neutral:
                 report["limitations"] = [
@@ -1041,10 +1076,14 @@ class SimulationService:
                 "report": report,
                 "coverage": coverage,
                 "completion_status": "complete",
-                "quantitative_source": "historical_baseline_with_calibrated_panel_shift"
-                if panel_calibration["applied"]
-                else "historical_baseline_with_age_reconciliation",
+                "quantitative_source": (
+                    "historical_baseline_with_calibrated_panel_shift"
+                    if panel_calibration["applied"]
+                    else "historical_baseline_with_age_reconciliation"
+                )
+                + ("_and_creative_audit" if audit_applied else ""),
                 "panel_calibration": panel_calibration,
+                "creative_checks": checks,
                 "model": {
                     "name": client.model,
                     "digest": runtime["digest"],
@@ -1270,6 +1309,9 @@ class SimulationService:
             assessment = assess_domain(Domain.from_brief(brief), REACTION_PROMPT_VERSION, client.model)
             behavior = native["behavior"]
             comparison = compare_predictions(predictions, native["draws"], assessment)
+            audits = self.audit_creatives(brief, client, runtime["digest"])
+            checks = creative_checks(brief, audits, behavior["creative_flags"])
+            annotate_comparison(comparison, checks)
             coverage = {
                 "required": len(plan),
                 "completed": len(decisions),
@@ -1281,7 +1323,14 @@ class SimulationService:
                 "reason": "agent_native: nessuna riconciliazione sul CTR storico.",
             }
             report = build_report(
-                brief, predictions, behavior, comparison, coverage, calibration, native=native["native"]
+                brief,
+                predictions,
+                behavior,
+                comparison,
+                coverage,
+                calibration,
+                native=native["native"],
+                checks=checks,
             )
             audit_predictions(predictions, brief.daily_adset_budget_eur)
             if neutral_reactions:
@@ -1306,6 +1355,7 @@ class SimulationService:
                 "completion_status": "complete",
                 "quantitative_source": "agent_native_decisions",
                 "panel_calibration": calibration,
+                "creative_checks": checks,
                 "model": {
                     "name": client.model,
                     "digest": runtime["digest"],

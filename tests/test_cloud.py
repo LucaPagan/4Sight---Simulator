@@ -199,7 +199,7 @@ def test_cloud_quota_and_resume_finish_same_provider_without_reusing_local_cache
     state = service.repo.get("simulation_runs", run["id"])
     assert state["completion_status"] == "complete", state
     assert state["completed_policies"] == 120
-    assert len(calls) == 121
+    assert len(calls) == 121 + 1  # one neutral creative audit; the mock answers it with an invalid shape
     result = service.result(run["id"])
     assert result["model"]["provider"] == "gemini"
     assert not result["model"]["digest_is_weights_hash"]

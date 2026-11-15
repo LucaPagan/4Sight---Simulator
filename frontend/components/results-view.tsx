@@ -31,6 +31,16 @@ export function summarize(predictions: Prediction[]): Summary[] {
 
 export function verdict(summaries: Summary[], result: Result): {title: string; detail: string; winner: number | null; trust?: string} {
   if (summaries.length === 1) return {title: "Risultato della creatività", detail: `CTR atteso ${percent(summaries[0].ctr)} e costo di ${euros(summaries[0].cpm)} ogni 1.000 visualizzazioni.`, winner: null};
+  const broken = new Set((result.report?.creative_checks ?? []).filter(c => c.status === "problematic").map(c => c.creative_id));
+  if (broken.size) {
+    const sound = summaries.filter(s => !broken.has(s.id));
+    const flagged = summaries.filter(s => broken.has(s.id)).map(s => markLetter(s.index)).join(", ");
+    const note = `${broken.size > 1 ? "Le creatività" : "La creatività"} ${flagged} ${broken.size > 1 ? "sono segnalate come problematiche" : "è segnalata come problematica"} e non entra nel confronto.`;
+    if (sound.length === 0) return {title: "Nessuna creatività regge", detail: `${note} Riscrivile prima di spendere budget.`, winner: null};
+    if (sound.length === 1) return {title: `Regge solo la creatività ${markLetter(sound[0].index)}`, detail: `CTR atteso ${percent(sound[0].ctr)}. ${note}`, winner: sound[0].index};
+    const rest = verdict(sound, {...result, report: result.report && {...result.report, creative_checks: []}});
+    return {...rest, detail: `${rest.detail} ${note}`};
+  }
   const ranked = [...summaries].sort((a, b) => b.ctr - a.ctr);
   const [top, second] = ranked;
   const diff = top.ctr - second.ctr;
@@ -179,6 +189,7 @@ export function ResultsView({runId}: {runId: string}) {
       )}
 
       {native && <NativeBanner />}
+      {result?.report?.creative_checks?.filter(c => c.message).map(c => <p key={c.creative_id} className="warn" role="alert">{c.message}</p>)}
       {result && summaries.length > 0 && <div className="results-grid">
         <section className="results-main">
           <div className="table-scroll">

@@ -189,7 +189,7 @@ def shifts_for(artifact, features_by_creative):
     return {i: float(v) for i, v in zip(ids, raw, strict=True)}
 
 
-def apply_ctr_shifts(predictions, draws, shifts):
+def apply_ctr_shifts(predictions, draws, shifts, assumption="panel_ctr_shift_calibrated"):
     """Shift CTR draws per creative. Impressions, CPM and spend (delivery) are never touched."""
     if not any(abs(s) > 0 for s in shifts.values()):
         return predictions, draws
@@ -204,5 +204,5 @@ def apply_ctr_shifts(predictions, draws, shifts):
         row["expected_clicks"] = clicks
         if "ctr_interval" in row:
             row["ctr_interval"] = np.quantile(draws["p"][:, i] * 100, [0.05, 0.95]).tolist()
-        row["assumptions"] = [*row.get("assumptions", []), "panel_ctr_shift_calibrated"]
+        row["assumptions"] = [*row.get("assumptions", []), assumption]
     return predictions, draws

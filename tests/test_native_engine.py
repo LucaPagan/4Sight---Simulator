@@ -33,6 +33,17 @@ class FakeAgent:
     def generate(self, system, user, schema, **options):
         if "cards" in schema["properties"]:
             return self.writer.generate(system, user, schema, **options)
+        if "hostility" in schema["properties"]:  # the neutral creative audit, not a persona reaction
+            self.audits = getattr(self, "audits", 0) + 1
+            audit = {
+                "comprehensible": 5,
+                "on_product": 5,
+                "internally_consistent": 5,
+                "hostility": 1,
+                "problems": [],
+                "summary": "Regge.",
+            }
+            return {"raw": json.dumps(audit), "seconds": 0.01, "tokens": 20, "provider": "fake", "model": "fake-agent"}
         self.reactions += 1
         if self.quota_at and self.reactions == self.quota_at:
             raise CloudQuotaError()
@@ -130,7 +141,7 @@ def test_agent_decisions_are_the_ctr_and_the_forecast_is_only_a_reference(servic
     _, run = run_native(service, agent)
     result = result_of(service, run)
     assert result["mode"] == "agent_native" and result["quantitative_source"] == "agent_native_decisions"
-    assert result["validated"] is False and result["model"]["prompt_version"] == "agent-reaction-v8.1"
+    assert result["validated"] is False and result["model"]["prompt_version"] == "agent-reaction-v8.2"
     for row in result["predictions"]:
         assert row["ctr_pred"] == pytest.approx(8.0)  # every reached persona says 8 clicks per 100
         assert row["expected_clicks"] == pytest.approx(row["expected_impressions"] * 0.08)

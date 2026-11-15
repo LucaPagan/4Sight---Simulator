@@ -305,6 +305,23 @@ class AgentDecision(StrictModel):
     frictions: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(max_length=4)
     evidence: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(min_length=1, max_length=4)
     unknowns: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(max_length=3)
+    # Whether the ad itself is broken for this person, independent of how much the topic interests them.
+    ad_problem: Literal["none", "confusing", "nonsense", "offensive", "off_topic"] = "none"
+
+
+class CreativeAudit(StrictModel):
+    """One neutral reading of a creative (not a persona): does it make sense, fit the product, hold together.
+
+    Scores are 1 (broken) to 5 (fine), except ``hostility`` where 1 is none and 5 is openly hostile or offensive."""
+
+    comprehensible: int = Field(ge=1, le=5)
+    on_product: int = Field(ge=1, le=5)
+    internally_consistent: int = Field(ge=1, le=5)
+    hostility: int = Field(ge=1, le=5)
+    problems: list[Literal["nonsense", "off_topic", "contradictory", "offensive", "spam", "unreadable"]] = Field(
+        max_length=4
+    )
+    summary: str = Field(min_length=3, max_length=240)
 
 
 class RuntimeSelection(StrictModel):
