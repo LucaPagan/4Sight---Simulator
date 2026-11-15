@@ -307,3 +307,5 @@ tr.winner td, tr.winner th { border-bottom-color: #BFCDE8; }
 .ideal p:first-child { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
 .block-form > .hint { margin-top: var(--s2); }
 .block-form > .field.wide { margin-top: var(--s4); }
+
+.steps { list-style: decimal; padding-left: var(--s5); margin: var(--s3) 0; display: grid; gap: var(--s2); }

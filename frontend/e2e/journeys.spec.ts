@@ -138,15 +138,38 @@ test("offer, price and landing page reach the scenario request", async ({page}) 
   expect(body).toMatchObject({seed: 42, prior_strength: 1, sensitivity_profile: "central"});
 });
 
-test("simulations list and settings tabs", async ({page}) => {
+test("simulations list and a settings page that only holds the AI engine", async ({page}) => {
   await mockApi(page);
   await page.goto("/runs");
   await expect(page.getByRole("link", {name: /Simulazione del 14 nov/})).toBeVisible();
   await page.goto("/settings");
-  await page.getByRole("tab", {name: "Fonti e metodo"}).click();
-  await expect(page.getByText("Cosa è un dato e cosa è un'ipotesi")).toBeVisible();
-  await page.getByRole("tab", {name: "Qualità del modello"}).click();
-  await expect(page.getByRole("button", {name: "Verifica ora"})).toBeVisible();
+  await expect(page.getByRole("heading", {name: "Motore AI"})).toBeVisible();
+  await expect(page.getByRole("heading", {name: "Dove lavorano i consumatori simulati"})).toBeVisible();
+  for (const gone of ["Fonti e metodo", "Qualità del modello", "Verifica ora", "Importa i dati del kit"]) {
+    await expect(page.getByText(gone)).toHaveCount(0);
+  }
+  await expect(page.getByRole("tab")).toHaveCount(0);
+});
+
+test("without Ollama the engine page explains what to do and the app still launches", async ({page}) => {
+  await mockApi(page);
+  await page.route("**/api/v1/runtime/status**", route => route.fulfill({json: {available: false, ready: false, selected_model: "qwen3.5:4b", recommended_model: "qwen3.5:4b", error: "Runtime locale non disponibile"}}));
+  await page.goto("/settings");
+  await expect(page.getByText("OLLAMA NON ATTIVO")).toBeVisible();
+  await expect(page.getByRole("link", {name: "ollama.com/download"})).toBeVisible();
+  await page.goto("/");
+  await page.getByRole("button", {name: "Compila con un esempio"}).click();
+  await expect(page.getByRole("button", {name: "Avvia simulazione"})).toBeEnabled();
+  await expect(page.getByText(/Il motore AI non è pronto/)).toBeVisible();
+});
+
+test("a missing local model offers a one-click download", async ({page}) => {
+  await mockApi(page);
+  await page.route("**/api/v1/runtime/status**", route => route.fulfill({json: {available: true, ready: false, selected_model: "qwen3.5:4b", recommended_model: "qwen3.5:4b", error: "Modello selezionato non installato"}}));
+  await page.route("**/api/v1/runtime/pull", route => route.fulfill({status: route.request().method() === "POST" ? 202 : 200, json: {status: "downloading", model: "qwen3.5:4b", completed: 1e9, total: 3.3e9, message: "pulling"}}));
+  await page.goto("/settings");
+  await expect(page.getByText("MODELLO DA SCARICARE")).toBeVisible();
+  await expect(page.getByRole("progressbar")).toBeVisible();
 });
 
 test("phone layout has no horizontal scroll and a top navigation", async ({page}) => {
@@ -217,7 +240,7 @@ test("simulated-people results show the label, the reach, the historical referen
   await expect(page.getByText("Scheda essenziale", {exact: true})).toBeVisible();
   await expect(page.getByText("Le decisioni non cambiano con il profilo")).toHaveCount(0);
   await expect(page.getByText("Troppe persone sembrano interessate")).toBeVisible();
-  await expect(page.getByRole("button", {name: "Scarica la rubrica per i valutatori"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Scarica la rubrica per i valutatori"})).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({path: "../.impeccable/review/results-native-desktop.png", fullPage: true});
 });

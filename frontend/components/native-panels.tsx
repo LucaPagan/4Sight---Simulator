@@ -4,7 +4,7 @@ import {useState} from "react";
 import {ATTRIBUTE_LABEL, NATIVE_WARNING, QUALITY_FLAG, QUALITY_WARNING, SEGMENT_LABEL, segmentValue, valueLabel} from "@/lib/copy";
 import {BANDS, fmt, percent} from "@/lib/format";
 import {Mark, markLetter} from "@/components/mark";
-import type {Divergence, Native, Quality, Result, TargetingReport} from "@/lib/types";
+import type {Divergence, Native, Quality, TargetingReport} from "@/lib/types";
 
 const pct = (share: number, digits = 0) => `${fmt(share * 100, digits)}%`;
 
@@ -135,7 +135,7 @@ export function SegmentsPanel({native, creativeId}: {native: Native; creativeId:
   );
 }
 
-export function QualityPanel({quality, result, onRubric, busy}: {quality: Quality; result: Result; onRubric: () => void; busy: boolean}) {
+export function QualityPanel({quality}: {quality: Quality}) {
   const flags = quality.flags;
   const dependence = Object.entries(quality.profile_dependence ?? {}).sort((a, b) => b[1].notice - a[1].notice).slice(0, 3);
   return (
@@ -154,7 +154,6 @@ export function QualityPanel({quality, result, onRubric, busy}: {quality: Qualit
         {dependence.length > 0 && <div><dt>Cosa fa cambiare le decisioni di più</dt><dd>{dependence.map(([k, v]) => `${SEGMENT_LABEL[k] ?? k} (${pct(v.notice)})`).join(", ")}</dd></div>}
       </dl>
       <p className="hint">Controlli automatici sulle risposte del modello. Per sapere se somigliano a persone vere servono valutatori umani.</p>
-      {result.mode === "agent_native" && <button className="button secondary" onClick={onRubric} disabled={busy}>Scarica la rubrica per i valutatori</button>}
     </section>
   );
 }

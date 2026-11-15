@@ -65,6 +65,47 @@ def effective_brief(brief, scenario):
     return brief.model_copy(update={"age_shares": [x / sum(shares) for x in shares]})
 
 
+NEUTRAL_EVALUATION = {
+    "clarity": 2,
+    "interest": 2,
+    "credibility": 2,
+    "friction": 2,
+    "conditional_action": "defer",
+    "frictions": [],
+    "evidence": ["assumption.placement"],
+    "unknowns": ["Valutazione non disponibile: risposta del modello non valida."],
+    "conditional_reaction": "Nessuna reazione affidabile: valutazione neutra.",
+}
+
+def neutral_reaction(prompt_version=""):
+    from .reactions import validate_decision
+
+    decision, _ = validate_decision(
+        json.dumps(
+            {
+                "first_impression": "Nessuna reazione affidabile disponibile.",
+                "detail_cited": "",
+                "read_beyond_glance": False,
+                "reaction_after_stopping": "",
+                "skip_per_100": 80,
+                "stop_per_100": 12,
+                "engage_per_100": 5,
+                "click_per_100": 3,
+                "action_if_engaged": "none",
+                "post_click_intent": "not_applicable",
+                "frictions": [],
+                "evidence": ["ad.text"],
+                "unknowns": ["Risposta del modello non valida: reazione neutra."],
+            }
+        )
+    )
+    return {"decision": decision, "per_100_normalized": False, "neutral": True, "prompt_version": prompt_version}
+
+
+# Ordine di preferenza quando il modello configurato non è installato: piccoli e abbastanza capaci prima.
+LOCAL_MODEL_PREFERENCE = ["qwen3.5:4b", "qwen3.5:9b", "ministral-3:8b", "qwen3:4b", "qwen3:8b", "qwen2.5:3b", "qwen2.5:7b", "llama3.2:3b", "gemma3:4b"]
+
+
 class SimulationService:
     def __init__(self, cfg: Settings):
         self.cfg = cfg
@@ -83,6 +124,24 @@ class SimulationService:
                 self.cfg.data_dir = Path(entry["path"])
             except KeyError:
                 pass
+        self.demo_data = False
+        self._use_demo_data_if_kit_missing()
+
+    def _use_demo_data_if_kit_missing(self):
+        # Senza il kit dell'hackathon (non redistribuibile) l'app parte con un dataset sintetico
+        # generato in locale, così funziona subito dopo il clone.
+        from .datasets import ASSETS, FILES
+
+        root = Path(self.cfg.data_dir)
+        if all((root / name).is_file() for name in [*FILES.values(), *ASSETS]):
+            return
+        from .demo_kit import write_demo_kit
+
+        demo = self.cfg.artifact_dir / "demo-data"
+        if not (demo / FILES["history"]).is_file():
+            write_demo_kit(demo)
+        self.cfg.data_dir = demo
+        self.demo_data = True
 
     def cloud_credentials(self, provider="gemini"):
         if credentials_path(self.cfg.artifact_dir, provider).exists():
@@ -122,7 +181,67 @@ class SimulationService:
             )
         if provider != "ollama":
             raise ValueError("Provider non consentito")
-        return OllamaClient(self.cfg.ollama_url, model or self.cfg.ollama_model)
+        return OllamaClient(self.cfg.ollama_url, model or self.local_model())
+
+    def pull_state(self):
+        return dict(getattr(self, "_pull", None) or {"status": "idle"})
+
+    def start_pull(self, model=None):
+        """Scarica un modello Ollama in background; lo stato si legge con pull_state()."""
+        model = model or self.cfg.ollama_model
+        with self.lock:
+            current = getattr(self, "_pull", None)
+            if current and current["status"] == "downloading":
+                return dict(current)
+            self._pull = {"status": "downloading", "model": model, "completed": 0, "total": 0, "message": "Avvio"}
+        threading.Thread(target=self._pull_worker, args=(model,), daemon=True, name="ollama-pull").start()
+        return self.pull_state()
+
+    def _pull_worker(self, model):
+        state = self._pull
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.cfg.ollama_url.rstrip('/')}/api/pull",
+                json={"model": model, "stream": True},
+                timeout=httpx.Timeout(30, read=None),
+                trust_env=False,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    if event.get("error"):
+                        raise ValueError(event["error"])
+                    state["message"] = event.get("status", "")
+                    if event.get("total"):
+                        state["total"], state["completed"] = event["total"], event.get("completed", 0)
+            state["status"] = "done"
+        except httpx.ConnectError:
+            state.update(status="error", message="Ollama non è in esecuzione: aprilo e riprova.")
+        except (httpx.HTTPError, ValueError) as exc:
+            state.update(status="error", message=f"Download non riuscito: {str(exc)[:160]}")
+
+    def local_models(self):
+        try:
+            response = httpx.get(f"{self.cfg.ollama_url.rstrip('/')}/api/tags", timeout=2, trust_env=False)
+            response.raise_for_status()
+            return [m["name"] for m in response.json().get("models", [])]
+        except (httpx.HTTPError, ValueError, KeyError):
+            return []
+
+    def local_model(self):
+        """Modello locale da usare: quello configurato se installato, altrimenti il migliore già presente."""
+        installed = self.local_models()
+        configured = self.cfg.ollama_model
+        if not installed or configured in installed:
+            return configured
+        for name in LOCAL_MODEL_PREFERENCE:
+            if name in installed:
+                return name
+        usable = [n for n in installed if "embed" not in n.lower()]
+        return usable[0] if usable else configured
 
     def import_dataset(self, root, activate=False):
         root = Path(root).resolve()
@@ -581,7 +700,8 @@ class SimulationService:
         if self.cfg.queue_mode == "manual":
             return
         run = self.repo.get("simulation_runs", run_id)
-        if run.get("provider", "ollama") == "ollama" and any(
+        # Con l'esecutore locale (un solo thread) le run si accodano da sole e partono una dopo l'altra.
+        if self.cfg.queue_mode != "local" and run.get("provider", "ollama") == "ollama" and any(
             r["id"] != run_id and r["status"] == "running" and r.get("provider", "ollama") == "ollama"
             for r in self.repo.list("simulation_runs", 1000)
         ):
@@ -809,6 +929,7 @@ class SimulationService:
             )
             policies = {}
             attempts = 0
+            neutral = 0
             for item in plan:
                 if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
                     return
@@ -873,13 +994,11 @@ class SimulationService:
                             f"Valutazione {item['agent_id']}/{item['creative_id']}: {type(exc).__name__}"
                         )
                 if last_error:
-                    self.repo.update_run(
-                        run_id,
-                        status="waiting_for_capacity",
-                        error=last_error,
-                        completed_policies=len(policies),
-                    )
-                    return
+                    # Un modello debole può sbagliare formato sempre allo stesso modo: la run non deve
+                    # restare bloccata. Questa valutazione diventa neutra (nessun effetto sul confronto),
+                    # non entra nella cache e viene dichiarata nel report.
+                    policies[item["key"]] = dict(NEUTRAL_EVALUATION)
+                    neutral += 1
                 self.repo.update_run(
                     run_id,
                     completed_policies=len(policies),
@@ -906,6 +1025,12 @@ class SimulationService:
             }
             report = build_report(brief, predictions, behavior, comparison, coverage, panel_calibration)
             audit_predictions(predictions, brief.daily_adset_budget_eur)
+            if neutral:
+                report["limitations"] = [
+                    f"Il modello non ha prodotto una risposta valida per {neutral} valutazioni su {len(plan)}: "
+                    "sono state trattate come neutre. Con un modello più capace il risultato sarà più affidabile.",
+                    *report.get("limitations", []),
+                ]
             result = {
                 "run_id": run_id,
                 "brief": brief.model_dump(mode="json"),
@@ -1112,23 +1237,31 @@ class SimulationService:
                 performance=performance["reactions"],
                 progress=reaction_progress,
                 canceled=interrupted,
+                stop_on_invalid=False,
             )
             decisions = execution["decisions"]
             if execution["canceled"]:
                 return
-            exc = execution["error"]
-            if exc:
-                if isinstance(exc, CloudQuotaError):
+            # Reazioni che il modello non sa scrivere in formato valido dopo i tentativi: neutre, dichiarate.
+            neutral_reactions = 0
+            if not execution["error"]:
+                for item in plan:
+                    if item["key"] not in decisions and item["key"] in execution["failed"]:
+                        decisions[item["key"]] = neutral_reaction(item["input"].get("prompt_version", ""))
+                        neutral_reactions += 1
+            reaction_error = execution["error"]
+            if reaction_error:
+                if isinstance(reaction_error, CloudQuotaError):
                     pause(
                         "waiting_for_capacity",
-                        str(exc),
-                        retry_after_seconds=exc.retry_after_seconds,
+                        str(reaction_error),
+                        retry_after_seconds=reaction_error.retry_after_seconds,
                         completed_policies=len(decisions),
                     )
-                elif isinstance(exc, (CloudRuntimeError, httpx.ConnectError)):
-                    pause("waiting_for_runtime", str(exc), completed_policies=len(decisions))
+                elif isinstance(reaction_error, (CloudRuntimeError, httpx.ConnectError)):
+                    pause("waiting_for_runtime", str(reaction_error), completed_policies=len(decisions))
                 else:
-                    pause("waiting_for_capacity", str(exc), completed_policies=len(decisions))
+                    pause("waiting_for_capacity", str(reaction_error), completed_policies=len(decisions))
                 return
             if len(decisions) != len(plan):
                 raise ValueError("Copertura panel incompleta")
@@ -1151,6 +1284,12 @@ class SimulationService:
                 brief, predictions, behavior, comparison, coverage, calibration, native=native["native"]
             )
             audit_predictions(predictions, brief.daily_adset_budget_eur)
+            if neutral_reactions:
+                report["limitations"] = [
+                    f"Il modello non ha prodotto una reazione valida per {neutral_reactions} casi su {len(plan)}: "
+                    "sono state trattate come neutre. Con un modello più capace il risultato sarà più affidabile.",
+                    *report.get("limitations", []),
+                ]
             result = {
                 "run_id": run_id,
                 "mode": "agent_native",

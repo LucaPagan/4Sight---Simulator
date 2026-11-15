@@ -1,135 +1,70 @@
 # Audience Simulator
 
-Un laboratorio locale per progettare e testare campagne Meta: inserisci prodotto, creatività, pubblico, periodo e budget; 120 consumatori sintetici valutano individualmente gli annunci tramite Ollama locale oppure un modello cloud selezionato. Il report distingue reazioni del panel, CTR/CPM calibrati sul kit e ipotesi demografiche.
+Un laboratorio locale per confrontare creatività di campagne Meta prima di spendere budget: descrivi prodotto, annunci, pubblico, periodo e budget; un pubblico di consumatori sintetici li valuta uno per uno e il report indica quale creatività sembra funzionare meglio, con CTR e CPM attesi.
 
-**Non è una validazione di esseri umani reali.** I dati Wevion sono simulati, non contengono label per età e non permettono di misurare accuratezza demografica. Nessuna campagna o spesa viene eseguita su Meta.
+**Non è una validazione su persone reali.** I numeri di mercato sono stimati da dati storici simulati e dalle reazioni di un modello linguistico: servono a confrontare idee, non a prevedere i risultati di una campagna. Nessuna campagna viene pubblicata e nessuna spesa viene eseguita su Meta.
 
-## Avvio locale
+## Avvio rapido
 
-Richiede Python 3.12, Node 22+ e Ollama. Il kit dell'hackathon non viene redistribuito: collocare i suoi 13 CSV in `data/` (i tre asset in `data/asset_creativi/`). Nel workspace di sviluppo i file sono già stati materializzati.
-
-```sh
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -c requirements.lock -e '.[dev]'
-npm --prefix frontend ci
-.venv/bin/python -m audience_simulator.cli bootstrap
-```
-
-Terminale 1, runtime locale (modelli negli artefatti del progetto, cloud disabilitato):
+Servono **Python 3.12+** e **Node.js 20.9+**. Poi, da terminale:
 
 ```sh
-bash scripts/models.sh
+git clone <url-del-repository> audience-simulator
+cd audience-simulator
+./start.sh
 ```
 
-Terminale 2, scaricamento modello candidato:
+Lo script fa tutto da solo: installa le dipendenze (solo la prima volta, qualche minuto), prepara i dati, avvia backend e interfaccia e apre il browser su [http://127.0.0.1:3000](http://127.0.0.1:3000). `Ctrl+C` ferma tutto. Non servono Docker, database o account.
 
-```sh
-ollama pull qwen3.5:9b
-```
+### Il motore AI
 
-Terminale 3:
+I consumatori simulati ragionano con un modello linguistico. Hai tre strade, tutte dall'app (**Impostazioni → Motore AI**):
 
-```sh
-.venv/bin/python -m audience_simulator.cli serve
-```
+| Strada | Cosa fare | Costo |
+|---|---|---|
+| **Sul tuo computer (consigliata)** | Installa [Ollama](https://ollama.com/download). `./start.sh` scarica da solo il modello `qwen3.5:4b` (circa 3 GB, una volta). Se preferisci, lo scarichi con un clic dall'app. | gratis |
+| **Cloud, Google Gemini** | Incolla una chiave gratuita di [Google AI Studio](https://aistudio.google.com/apikey). | piano gratuito |
+| **Cloud, Cloudflare Workers AI** | Incolla Account ID e token di un account Workers Free. | piano gratuito |
 
-Terminale 4:
+**Anche senza nessun motore l'app funziona**: la simulazione restituisce una stima statistica dai dati storici e, appena prepari il motore, puoi riprenderla per aggiungere le reazioni dei consumatori simulati.
 
-```sh
-npm --prefix frontend run dev
-```
+Un modello sul tuo computer è lento: con `qwen3.5:4b` una simulazione «Standard» (120 consumatori) richiede decine di minuti su un portatile, «Veloce» (60) la metà; durante l'attesa vedi subito la stima statistica, che si aggiorna da sola. I modelli cloud gratuiti sono molto più rapidi. Un modello più piccolo è più veloce ma meno accurato. Per un risultato migliore su un computer potente: `AUDIENCE_OLLAMA_MODEL=qwen3.5:9b ./start.sh` (poi `ollama pull qwen3.5:9b`). Se il modello scelto non è installato, l'app usa il migliore tra quelli presenti.
 
-Aprire [http://127.0.0.1:3000](http://127.0.0.1:3000). In alternativa `bash scripts/dev.sh` installa le dipendenze e avvia API/frontend, lasciando Ollama separato.
+### Dati
 
-Il primo forecast addestra e salva il modello statistico. Il percorso normale è **Nuova simulazione → brief e creatività → pubblico e ipotesi → avvio → risultati**. Una run non diventa completa finché tutte le policy richieste non sono valide. Se Ollama si disconnette, riprendere le sole mancanti dal report.
+L'app include un **dataset storico dimostrativo**, generato in locale e interamente sintetico: serve a provarla subito, i suoi numeri non descrivono un mercato reale. Se hai il kit originale dell'hackathon (13 CSV), copialo in `data/` (i tre asset in `data/asset_creativi/`) e riavvia: verrà usato al posto di quello dimostrativo.
 
-## Modelli e gratuità
+## Come si usa
 
-Candidati Apache 2.0: `qwen3.5:9b`, `qwen3.5:4b`, `ministral-3:8b`. Un unico modello serve i 120 agenti con profili e chiamate separati. Nessun costo API; rimangono memoria, energia e tempo locali.
+**Nuova** → racconta la campagna e scrivi due o più creatività → (facoltativo) descrivi il pubblico → **Avvia simulazione** → leggi il risultato. Le simulazioni restano salvate in **Simulazioni**. Se qualcosa si interrompe (modello spento, quota finita) si riprende da dove si era fermata; le valutazioni già fatte non si ripetono.
 
-```sh
-.venv/bin/python -m audience_simulator.cli benchmark --model qwen3.5:9b
-```
+Due modi di simulare:
 
-Il benchmark produce 96 casi, retry, latenza e risposte in `artifacts/benchmarks/`. La validità JSON non sostituisce la rubrica di grounding, italiano, profilo, unknown e frizioni. Il report non dichiara qualificato automaticamente un modello senza revisione dei contenuti. Cambiare il modello con `AUDIENCE_OLLAMA_MODEL`; il digest fa parte della cache e una run non mescola digest diversi.
+- **Stima dai dati storici** (predefinito): il CTR parte dai dati storici e i consumatori simulati ne spiegano il perché.
+- **Persone simulate** (sperimentale, richiede di descrivere il pubblico): il CTR nasce dalle decisioni di ogni persona simulata. Più lenta.
 
-Ogni agente valuta ogni creatività per ciascun regime rilevante, non ogni singola impression. Con 120 agenti e due creatività: 240 valutazioni per regime. Memoria e contesto cambiano a ogni esposizione nel motore probabilistico; le policy sono reazioni condizionali a notare l'annuncio. Un'esposizione ignorata non produce un monologo.
+## Impostazioni tecniche
 
-## Switch locale / cloud
+Variabili d'ambiente (o file `.env`, vedi `.env.example`):
 
-Apri **Modelli e cloud** nell’app. Per ogni nuovo test scegli Ollama, Google Gemini o Cloudflare Workers AI. Provider e modello sono fissati per run; un cambio di selettore non modifica una simulazione già avviata. Per confrontare due provider avvia due run dello stesso brief. La cache rimane separata e ogni agente viene valutato individualmente.
+| Variabile | Significato |
+|---|---|
+| `AUDIENCE_OLLAMA_MODEL` | modello locale preferito (predefinito `qwen3.5:4b`) |
+| `AUDIENCE_API_PORT`, `AUDIENCE_WEB_PORT` | porte iniziali (se occupate si usano le successive) |
+| `AUDIENCE_NO_BROWSER=1` | non aprire il browser |
+| `SKIP_MODEL_DOWNLOAD=1` | non scaricare il modello all'avvio |
 
-**Google AI Studio:** inserisci la chiave API, conferma un progetto Free Tier senza billing attivo, salva e premi **Prova il modello selezionato**. Modelli: Gemini3.5Flash-Lite e Gemini3.8Flash. Le quote effettive sono quelle del tuo progetto in [AI Studio](https://aistudio.google.com/rate-limit); l’app non può ricavare il tier di fatturazione dalla chiave.
+I segreti cloud restano in file privati sotto `artifacts/`, mai nel database o nei report. Nelle modalità cloud il brief e i profili sintetici sono inviati al provider scelto. Tutti i dati dell'app (database SQLite, cache, risultati) sono in `artifacts/`.
 
-**Cloudflare Workers AI:** crea un account Workers Free; da Workers AI → Use REST API copia Account ID e crea il token dal template (permessi Workers AI Read+Edit). Inseriscili nell’app e conferma Workers Free. Sono disponibili Gemma4-26B-A4B e GLM4.7Flash. Il piano Free offre **10.000 Neurons/giorno**, con reset00:00UTC e stop oltre quota; il piano Paid può fatturare gli extra. Non è un’offerta illimitata o garantita per sempre. La prova mostra una stima dei Neurons dai token quando disponibili; non è il saldo ufficiale dell’account. [Prezzi e allocazione ufficiali](https://developers.cloudflare.com/workers-ai/platform/pricing/).
-
-I segreti restano in file privati0600 sotto artifacts, separati per provider, e non entrano in SQLite, report, prompt, S3 o repository. In cloud, il brief e i profili sintetici sono trasmessi al provider scelto. Nessun upgrade, modello a pagamento, cambio di provider o rotazione automatica di account. Se la quota termina la run conserva le policy e si può riprendere. Il limite richieste/minuto è condiviso fra panel e prove anche fra processi del progetto.
-
-Il cloud ha un executor/coda RQ separato: un lungo test Ollama non lo blocca. Il test singolo usa dati sintetici e misura soltanto latenza e validità JSON; «più veloce/più forte» richiede un confronto reale. La disponibilità gratuita è stata verificata nelle fonti il14/11/2026; cambia con le condizioni dei provider.
-
-```sh
-.venv/bin/python -m audience_simulator.cli benchmark --provider gemini --model gemini-3.5-flash-lite
-.venv/bin/python -m audience_simulator.cli benchmark --provider cloudflare --model @cf/google/gemma-4-26b-a4b-it
-.venv/bin/python -m audience_simulator.cli simulate brief.json --provider cloudflare
-.venv/bin/python -m audience_simulator.cli ablation --provider gemini --model gemini-3.5-flash-lite
-.venv/bin/python -m audience_simulator.cli cleanup
-```
-
-L’ablation è sperimentale e riprendibile via cache; può richiedere4.356policy su36asset. Il cleanup è dry run salvo `--apply`: scadenza30giorni per log e cache non referenziata, snapshot e run preservati. Il progetto include i tipiTS generati dai contratti Pydantic con `audience schemas`.
-
-## Audit, previsione e validazione
-
-```sh
-.venv/bin/python -m audience_simulator.cli audit
-.venv/bin/python -m audience_simulator.cli train
-.venv/bin/python -m audience_simulator.cli validate
-.venv/bin/python -m audience_simulator.cli predict
-```
-
-L'export tecnico genera `artifacts/official/predictions.csv` (699 righe nello stesso ordine) e `age_predictions.csv` (4.194 righe). È una baseline preliminare con decomposizione teorica, distinta dalla simulazione completa LLM. Un nuovo brief non modifica il file ufficiale.
-
-Training 17/08–01/11/2026; validazione 02–15/11; futuro 16–30/11 senza target. Le finestre interne al training stimano gli errori fuori campione. La validazione sceglie fra GLM e smoothing e non è presentata come test futuro indipendente. Nessun refit sulle label di validazione.
-
-CTR = 100 × clic/impression. CPM = 1000 × spesa/impression. Il budget è condiviso fra gli annunci dell'adset. Le sei probabilità per età sono riconciliate numericamente al totale; quote, effetti e meccanismi rimangono ipotesi. CPM per età nullo senza modello d'asta.
-
-Anomalie conservate: 168 disaccordi nel periodo dei budget (calendario autoritativo); FGR-AS1 il21/10 spende397,55€ contro100€ (escluso dal fitting delivery); CDF-AS3 il10/11 eccede di un centesimo. Nove CPC null corrispondono a zero clic. Nessuna creatività Black Friday nel training: extrapolazione esplicita.
-
-## Docker Compose
-
-Avviare Ollama nativo sul Mac e verificare che Docker Desktop possa raggiungerlo tramite `host.docker.internal:11434`, mantenendo il runtime privato. Poi:
-
-```sh
-docker compose up --build
-```
-
-Compose usa PostgreSQL, Redis/RQ e MinIO. La Community Edition di MinIO è distribuita solo come sorgente e il repository è archiviato: Compose compila una release fissata dal [repository ufficiale](https://github.com/minio/minio), senza dipendere dall’immagine Docker Hub rimossa. Questo percorso è per lo sviluppo locale. Solo il frontend espone una porta, su127.0.0.1:3000. Le password predefinite sono esclusivamente per lo sviluppo locale; configurare `.env` se necessario. Il percorso senza servizi usa SQLite e filesystem con gli stessi contratti. Nessuna autenticazione multiutente: non pubblicare questa configurazione su Internet.
-
-Migrazioni: `.venv/bin/alembic upgrade head`. API e worker condividono schema e codice. Tutti gli artefatti sono in `artifacts/`; originali, policy e snapshot necessari al replay devono essere conservati. Il replay esatto parte dalle risposte LLM salvate, non da nuove generazioni potenzialmente diverse.
-
-## Test
+## Per sviluppatori
 
 ```sh
 .venv/bin/pytest -q
 .venv/bin/ruff check backend tests
 .venv/bin/mypy backend/audience_simulator
 npm --prefix frontend run typecheck
-npm --prefix frontend run build
-cd frontend
-npx playwright install chromium
-npm run test:e2e
+npm --prefix frontend run test:unit
+cd frontend && npx playwright install chromium && npm run test:e2e
 ```
 
-I test del provider utilizzano un trasporto HTTP controllato, non simulano una validazione del modello reale. Il benchmark locale è separato. In CI, il kit non redistribuito comporta skip espliciti dei test che lo richiedono; matematica, contratti e comportamento restano eseguibili.
-
-## Documentazione
-
-- [Piano](docs/IMPLEMENTATION_PLAN.md)
-- [Specifica agenti](docs/AGENT_SYSTEM_SPEC.md)
-- [Requisiti originali](docs/IMPLEMENTATION_REQUIREMENTS.md)
-- [OpenAPI](docs/openapi.json), rigenerabile con `audience schemas`
-
-I pattern dei ruoli si ispirano ad agency-agents; nessun suo predittore scientifico è stato riutilizzato. Le fonti esterne hanno stato di revisione e limiti nel Behavioral Evidence Registry dell'app.
-
-## Video di tre minuti
-
-0:00–0:35 brief e due creatività;0:35–1:05 pubblico/quote/prior;1:05–1:35 copertura delle valutazioni individuali;1:35–2:10 report CTR/CPM, fasce e reazioni;2:10–2:40 confronto e ipotesi da testare;2:40–3:00 validazione e limiti. Il file video non viene fabbricato dal codice: registrare una sessione reale dopo il benchmark e una run completa.
+Riferimenti: [OpenAPI](docs/openapi.json) (rigenerabile con `audience schemas`), [specifica degli agenti](docs/AGENT_SYSTEM_SPEC.md), [piano](docs/IMPLEMENTATION_PLAN.md), [calibrazione](docs/CALIBRATION.md), [incertezza](docs/UNCERTAINTY.md). Comandi CLI (audit, benchmark, ablation, ecc.): `.venv/bin/python -m audience_simulator.cli --help`.

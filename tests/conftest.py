@@ -3,6 +3,12 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_credentials_key(tmp_path_factory, monkeypatch):
+    # I test non devono mai creare o leggere la vera chiave di cifratura in ~/.audience-simulator.
+    monkeypatch.setenv("AUDIENCE_CREDENTIALS_KEY_FILE", str(tmp_path_factory.mktemp("keys") / "credentials.key"))
+
+
 def pytest_collection_modifyitems(items):
     if Path("data/storico_giornaliero.csv").exists():
         return

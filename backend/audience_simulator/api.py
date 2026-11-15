@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
-from .cloud import GEMINI_MODELS, save_credentials
+from .cloud import GEMINI_MODELS, CloudQuotaError, CloudRuntimeError, save_credentials
 from .cloudflare import CLOUDFLARE_MODELS
 from .config import settings
 from .contracts import SimulationResult, SimulationRun
@@ -71,11 +71,27 @@ def create_app(service=None):
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "local_only": True}
+        return {"status": "ok", "local_only": True, "demo_data": getattr(svc, "demo_data", False)}
 
     @app.get("/api/v1/runtime/status")
     def runtime(provider: str = "ollama", model: str | None = None):
-        return svc.client(provider, model).status()
+        state = svc.client(provider, model).status()
+        if provider == "ollama":
+            state["recommended_model"] = svc.cfg.ollama_model
+        return state
+
+    @app.get("/api/v1/runtime/pull")
+    def pull_status():
+        return svc.pull_state()
+
+    @app.post("/api/v1/runtime/pull", status_code=202)
+    def pull_model(request: dict | None = None):
+        import re
+
+        model = (request or {}).get("model") or svc.cfg.ollama_model
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,100}", model):
+            raise HTTPException(422, "Nome modello non valido")
+        return svc.start_pull(model)
 
     @app.get("/api/v1/runtime/config")
     def runtime_config(provider: str = "gemini"):
@@ -135,7 +151,14 @@ def create_app(service=None):
         item = evaluation_plan(brief, generate_population(brief)[:1], state["digest"], client.prompt_version)[
             0
         ]
-        response = client.evaluate(item["input"])
+        if hasattr(client, "retry_delays"):
+            client.retry_delays = ()  # la prova rapida tenta una volta sola: un modello sovraccarico va segnalato subito
+        try:
+            response = client.evaluate(item["input"])
+        except CloudQuotaError as exc:
+            raise HTTPException(429, str(exc)) from None
+        except CloudRuntimeError as exc:
+            raise HTTPException(502, str(exc)) from None
         svc.repo.create(
             "llm_benchmark_runs",
             {

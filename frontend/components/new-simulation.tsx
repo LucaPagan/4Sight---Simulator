@@ -23,7 +23,7 @@ const SIZES = [
 
 export function NewSimulation() {
   const router = useRouter();
-  const {brief, patch, setError, editCreative, addCreative, removeCreative, loadExample, resetBrief, rememberRunName, refresh, runtime, runtimeChoice} = useApp();
+  const {brief, patch, setError, editCreative, addCreative, removeCreative, loadExample, resetBrief, rememberRunName, refresh, runtime, runtimeChoice, demoData} = useApp();
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<Mode>("history_forecast");
   const [full, setFull] = useState(true);
@@ -194,13 +194,15 @@ export function NewSimulation() {
             </>
           ) : <p><b className="num">{fmt(brief.population_size * brief.creatives.length)}</b> valutazioni</p>}
           <p className="hint">{engine} · {runtime?.ready ? "pronto" : "da verificare"}. <Link href="/settings">Cambia motore</Link></p>
-          {!runtime?.ready && <p className="hint">Se il modello non risponde, parte una stima preliminare dai dati storici.</p>}
+          {runtimeChoice.provider === "ollama" && runtime?.ready && <p className="hint">Un modello sul tuo computer è lento: per un primo giro scegli «Veloce». Intanto vedi subito la stima statistica, che si aggiorna da sola.</p>}
+          {!runtime?.ready && <p className="hint">Il motore AI non è pronto: puoi avviare lo stesso e ottieni una stima statistica; per le reazioni dei consumatori simulati <Link href="/settings">configura il motore</Link>.</p>}
           {missing.length > 0 && <p className="hint">Per partire mancano: {missing.join(", ")}.</p>}
           <button className="button primary big" disabled={missing.length > 0 || busy} onClick={launch}>
             {busy && <LoaderCircle className="spin" size={18} aria-hidden="true" />} Avvia simulazione
           </button>
         </div>
         <p className="note">{SIMULATION_NOTE}</p>
+        {demoData && <p className="note">Dati storici dimostrativi (sintetici): i numeri servono a provare l&apos;app, non descrivono un mercato reale.</p>}
       </aside>
       </div>
     </div>

@@ -12,6 +12,7 @@ import httpx
 
 from .agents import evaluation_schema, validate_evaluation
 from .prompts import PROMPT_VERSION, SYSTEM_PROMPT, model_view
+from .secret_store import SecretStoreError, decrypt_secret, encrypt_secret
 
 GEMINI_MODELS = {
     "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite · velocità",
@@ -28,11 +29,33 @@ def credentials_path(root, provider="gemini"):
     )
 
 
+def _write_private(path, payload):
+    path = Path(path)
+    temporary = path.parent / f".{path.stem}.{uuid4().hex}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(payload, stream)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def read_credentials(root, provider="gemini"):
+    """Credenziali salvate. La chiave sta su disco solo cifrata; un vecchio file in chiaro viene cifrato al primo accesso."""
     path = credentials_path(root, provider)
     if not path.exists():
         return {"api_key": "", "free_tier_confirmed": False}
-    return json.loads(path.read_text())
+    data = json.loads(path.read_text())
+    if "api_key" in data:  # formato precedente: chiave in chiaro -> la riscrivo cifrata subito
+        plaintext = data.pop("api_key")
+        _write_private(path, {**data, "api_key_encrypted": encrypt_secret(plaintext)})
+        return {**data, "api_key": plaintext}
+    try:
+        key = decrypt_secret(data.pop("api_key_encrypted", ""))
+    except SecretStoreError:
+        key = ""  # chiave di cifratura persa: la chiave API va reinserita, l'app non si blocca
+    return {**data, "api_key": key}
 
 
 def save_credentials(
@@ -40,23 +63,15 @@ def save_credentials(
 ):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    path = credentials_path(root, provider)
-    temporary = root / f".{provider}-credentials.{uuid4().hex}.tmp"
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(
-                {
-                    "api_key": key,
-                    "free_tier_confirmed": free_tier_confirmed,
-                    "requests_per_minute": requests_per_minute,
-                    "account_id": account_id,
-                },
-                stream,
-            )
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _write_private(
+        credentials_path(root, provider),
+        {
+            "api_key_encrypted": encrypt_secret(key),
+            "free_tier_confirmed": free_tier_confirmed,
+            "requests_per_minute": requests_per_minute,
+            "account_id": account_id,
+        },
+    )
 
 
 class CloudRuntimeError(ValueError):
@@ -77,6 +92,7 @@ class CloudQuotaError(CloudRuntimeError):
         )
 
 
+READ_TIMEOUT_SECONDS = 50  # un modello sovraccarico può non rispondere mai: meglio fallire presto e dirlo
 RETRY_DELAYS = (4, 12)  # seconds before the second and third attempt of a generation hit by a passing failure
 TRANSIENT_STATUS = {500, 502, 503, 504}
 
@@ -102,15 +118,18 @@ def retry_seconds(text):
     return total if 0 < total < 86401 else None
 
 
-def post_with_retry(http, url, body, sleep=time.sleep):
-    """POST that survives a passing overload or timeout. Quota and auth errors are returned at once for ``_check``."""
-    for delay in (*RETRY_DELAYS, None):
+def post_with_retry(http, url, body, sleep=time.sleep, delays=None):
+    """POST that survives a passing overload or timeout. Quota and auth errors are returned at once for ``_check``.
+
+    ``delays`` defaults to RETRY_DELAYS; an empty tuple means a single attempt (used by the quick connection test)."""
+    for delay in (*(RETRY_DELAYS if delays is None else delays), None):
         try:
             response = http.post(url, json=body)
         except httpx.TimeoutException:
             if delay is None:
                 raise CloudRuntimeError(
-                    "Il provider non ha risposto in tempo per tre volte. Riprendi la run tra qualche minuto."
+                    "Il provider non ha risposto in tempo: il modello è probabilmente sovraccarico in questo momento. "
+                    "Riprova tra qualche minuto, oppure scegli un altro modello. Le policy salvate restano disponibili."
                 ) from None
             sleep(delay)
             continue
@@ -172,10 +191,11 @@ class GeminiClient:
         self.http = httpx.Client(
             base_url="https://generativelanguage.googleapis.com",
             headers={"x-goog-api-key": api_key, "Api-Revision": "2026-05-20"},
-            timeout=120,
+            timeout=httpx.Timeout(READ_TIMEOUT_SECONDS, connect=10),
             transport=transport,
             trust_env=False,
         )
+        self.retry_delays = RETRY_DELAYS
 
     def status(self):
         ready = self.configured and self.free_tier_confirmed
@@ -194,6 +214,10 @@ class GeminiClient:
             else "Configura la chiave Gemini e conferma un progetto Free Tier senza billing attivo.",
             "warning": "Il tier di fatturazione non è verificabile dalla chiave. Usa un progetto Google senza billing. Quote e policy dati del provider si applicano.",
         }
+
+    def _thinking_level(self):
+        # "minimal" è accettato solo da Flash-Lite: Gemini 3.8 Flash risponde HTTP 400, quindi usa "low".
+        return "minimal" if self.model.endswith("flash-lite") else "low"
 
     def _check(self, response):
         if response.status_code == 429:
@@ -246,9 +270,10 @@ class GeminiClient:
                 "generation_config": {
                     "temperature": temperature,
                     "max_output_tokens": max_tokens,
-                    "thinking_level": "minimal" if self.model.endswith("flash-lite") else "low",
+                    "thinking_level": self._thinking_level(),
                 },
             },
+            delays=self.retry_delays,
         )
         self._check(response)
         response.raise_for_status()
@@ -270,9 +295,10 @@ class GeminiClient:
         pacing = self.limiter.pace()
         start = time.monotonic()
         view = model_view(payload)
-        response = self.http.post(
+        response = post_with_retry(
+            self.http,
             "/v1beta/interactions",
-            json={
+            {
                 "model": self.model,
                 "system_instruction": SYSTEM_PROMPT,
                 "input": json.dumps(view, ensure_ascii=False),
@@ -286,9 +312,10 @@ class GeminiClient:
                 "generation_config": {
                     "temperature": 0,
                     "max_output_tokens": 1024,
-                    "thinking_level": "minimal" if self.model.endswith("flash-lite") else "low",
+                    "thinking_level": self._thinking_level(),
                 },
             },
+            delays=self.retry_delays,
         )
         self._check(response)
         response.raise_for_status()

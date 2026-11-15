@@ -126,23 +126,6 @@ export function ResultsView({runId}: {runId: string}) {
       window.open(value.download_url, "_blank", "noopener");
     } catch (e) {setError((e as Error).message);} finally {setBusy("");}
   }
-  // La rubrica per i valutatori e la chiave che ne ricollega le righe vanno consegnate separatamente.
-  async function downloadRubric() {
-    if (!run) return;
-    setBusy("rubric");
-    try {
-      const sheet = await api<{csv: string; key: Record<string, string>}>(`/simulations/${run.id}/rubric?n=60`);
-      const save = (name: string, text: string, type: string) => {
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(new Blob([text], {type}));
-        link.download = name;
-        link.click();
-        URL.revokeObjectURL(link.href);
-      };
-      save(`rubrica-${run.id.slice(0, 8)}.csv`, sheet.csv, "text/csv");
-      save(`chiave-rubrica-${run.id.slice(0, 8)}.json`, JSON.stringify(sheet.key, null, 2), "application/json");
-    } catch (e) {setError((e as Error).message);} finally {setBusy("");}
-  }
   // Riporta i dati nel modulo per ripetere la simulazione cambiando solo ciò che serve.
   async function repeat() {
     if (!run) return;
@@ -187,6 +170,7 @@ export function ResultsView({runId}: {runId: string}) {
             ? `${fmt(run.performance.cards?.attempts ?? 0)} tentativi · ${fmt(run.performance.cards?.rejected ?? 0)} scarti · ${fmt(run.performance.cards?.cache_hits ?? 0)} riusi dalla cache`
             : `${fmt(run.performance.reactions?.cache_hits ?? 0)} riusi di reazioni dalla cache`}</p>}
           {run.error && <p className="warn">{run.error}</p>}
+          {run.status === "waiting_for_runtime" && <p className="muted">I numeri qui sotto sono una stima statistica dai dati storici. Per far reagire i consumatori simulati <Link href="/settings">prepara il motore AI</Link> e poi riprendi la simulazione.</p>}
           <div className="row">
             {isRunResumable(run) && <button className="button secondary" onClick={() => post(`/simulations/${run.id}/resume`)} disabled={!!busy}><RefreshCw size={18} aria-hidden="true" /> Riprendi dove si era fermata</button>}
             {inProgress && <button className="button ghost" onClick={() => post(`/simulations/${run.id}/cancel`)} disabled={!!busy}>Annulla</button>}
@@ -265,14 +249,13 @@ export function ResultsView({runId}: {runId: string}) {
         {nativeReport && <div className="results-wide"><DivergencePanel divergence={nativeReport.divergence} order={order} /></div>}
         {nativeReport && <div className="results-wide"><SegmentsPanel native={nativeReport} creativeId={selected} /></div>}
         {native && result.cards && <div className="results-wide"><PersonaGallery result={result} creativeId={selected} /></div>}
-        {native && quality && <div className="results-wide"><QualityPanel quality={quality} result={result} onRubric={downloadRubric} busy={!!busy} /></div>}
+        {native && quality && <div className="results-wide"><QualityPanel quality={quality} /></div>}
 
         {result.report && (
           <details className="more">
             <summary>Cosa provare dopo e limiti</summary>
             {result.report.diagnoses.map(d => <p key={d.creative_id} className="top-space"><b>{d.creative_id.replace("creative-", "")}</b>: {d.hypothesis} <span className="muted">{d.experiment.design}</span></p>)}
             <ul className="plain top-space">{result.report.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul>
-            <p className="muted top-space"><Link href="/settings">Come si calcola</Link></p>
           </details>
         )}
       </div>}

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     artifact_dir: Path = Path("artifacts")
     ollama_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "qwen3.5:9b"
+    ollama_model: str = "qwen3.5:4b"
     ollama_reaction_concurrency: int = Field(default=1, ge=1, le=4)
     gemini_api_key: SecretStr = SecretStr("")
     gemini_free_tier_confirmed: bool = False

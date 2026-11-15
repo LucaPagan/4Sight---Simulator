@@ -61,6 +61,7 @@ type Ctx = {
   runtimeChoice: RuntimeChoice;
   setRuntimeChoice: (value: RuntimeChoice) => void;
   runtime: Runtime | null;
+  demoData: boolean;
   runs: Run[];
   runNames: Record<string, string>;
   rememberRunName: (id: string, name: string) => void;
@@ -83,6 +84,7 @@ export function AppProvider({children}: {children: ReactNode}) {
   const [brief, setBrief] = useState<Brief>(EMPTY_BRIEF);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [runtime, setRuntime] = useState<Runtime | null>(null);
+  const [demoData, setDemoData] = useState(false);
   const [runtimeChoice, setRuntimeChoice] = useState<RuntimeChoice>({provider: "ollama", model: ""});
   const [runs, setRuns] = useState<Run[]>([]);
   const [runNames, setRunNames] = useState<Record<string, string>>({});
@@ -120,6 +122,7 @@ export function AppProvider({children}: {children: ReactNode}) {
     })();
     return () => {live = false;};
   }, []);
+  useEffect(() => {api<{demo_data?: boolean}>("/health").then(h => setDemoData(!!h.demo_data)).catch(() => {});}, []);
   useEffect(() => {api<Catalog>("/targeting/catalog").then(setCatalog).catch(() => {});}, []);
   const reloadAssets = useCallback(() => {api<Asset[]>("/assets").then(setAssets).catch(() => {});}, []);
   useEffect(() => reloadAssets(), [reloadAssets]);
@@ -156,8 +159,8 @@ export function AppProvider({children}: {children: ReactNode}) {
 
   const value = useMemo<Ctx>(() => ({
     brief, setBrief, patch, editCreative, patchTargeting, clearTargeting, catalog, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets,
-    runtimeChoice, setRuntimeChoice, runtime, runs, runNames, rememberRunName, runWinners, rememberRunWinner, refresh, error, setError
-  }), [runWinners, rememberRunWinner, brief, patch, editCreative, patchTargeting, clearTargeting, catalog, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets, runtimeChoice, runtime, runs, runNames, rememberRunName, refresh, error]);
+    runtimeChoice, setRuntimeChoice, runtime, demoData, runs, runNames, rememberRunName, runWinners, rememberRunWinner, refresh, error, setError
+  }), [demoData, runWinners, rememberRunWinner, brief, patch, editCreative, patchTargeting, clearTargeting, catalog, addCreative, removeCreative, applyAsset, loadExample, resetBrief, assets, reloadAssets, runtimeChoice, runtime, runs, runNames, rememberRunName, refresh, error]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

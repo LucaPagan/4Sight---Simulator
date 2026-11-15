@@ -1,9 +1,17 @@
 import json
+import os
 import stat
+from pathlib import Path
 
 import httpx
 import pytest
-from audience_simulator.cloud import CloudQuotaError, GeminiClient, read_credentials, save_credentials
+from audience_simulator.cloud import (
+    CloudQuotaError,
+    CloudRuntimeError,
+    GeminiClient,
+    read_credentials,
+    save_credentials,
+)
 from test_agents_behavior import policy
 
 
@@ -201,7 +209,7 @@ def test_cloud_quota_and_resume_finish_same_provider_without_reusing_local_cache
     assert service.repo.get_policy(local[0]["key"]) is None
 
 
-def test_second_local_run_waits_while_cloud_selection_is_independent(tmp_path):
+def test_second_local_run_is_queued_behind_the_running_one(tmp_path):
     from audience_simulator.config import Settings
     from audience_simulator.service import SimulationService
 
@@ -213,8 +221,12 @@ def test_second_local_run_waits_while_cloud_selection_is_independent(tmp_path):
     active = service.repo.create_run(scenario["id"], "first")
     service.repo.update_run(active["id"], status="running")
     waiting = service.repo.create_run(scenario["id"], "second")
+    submitted = []
+    service.executor = type("Pool", (), {"submit": lambda self, fn, *a: submitted.append(a)})()
     service.dispatch(waiting["id"])
-    assert service.repo.get("simulation_runs", waiting["id"])["status"] == "waiting_for_capacity"
+    # L'esecutore locale ha un solo thread: la seconda run resta in coda e parte da sola.
+    assert service.repo.get("simulation_runs", waiting["id"])["status"] == "queued"
+    assert submitted == [(waiting["id"],)]
     assert service.repo.get("simulation_runs", active["id"])["status"] == "running"
 
 
@@ -245,3 +257,47 @@ def test_provider_rate_limit_is_shared_by_probe_and_panel_clients(tmp_path, monk
     probe.evaluate(payload)
     panel.evaluate(payload)
     assert delays == [6.0, 6.0]
+
+
+def test_api_key_is_never_stored_in_plaintext(tmp_path):
+    secret = "AIza-test-secret-key-0123456789"
+    save_credentials(tmp_path, secret, True)
+    raw = (tmp_path / "runtime-credentials.json").read_text()
+    assert secret not in raw and "api_key_encrypted" in raw
+    assert read_credentials(tmp_path)["api_key"] == secret
+    key_file = Path(os.environ["AUDIENCE_CREDENTIALS_KEY_FILE"])
+    assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    assert tmp_path not in key_file.parents  # la chiave di cifratura non sta accanto ai dati
+
+
+def test_legacy_plaintext_credentials_are_encrypted_on_first_read(tmp_path):
+    import json
+
+    path = tmp_path / "runtime-credentials.json"
+    path.write_text(json.dumps({"api_key": "legacy-plain-key", "free_tier_confirmed": True, "requests_per_minute": 20}))
+    assert read_credentials(tmp_path)["api_key"] == "legacy-plain-key"
+    assert "legacy-plain-key" not in path.read_text()
+    assert read_credentials(tmp_path)["api_key"] == "legacy-plain-key"
+
+
+def test_lost_encryption_key_asks_for_reentry_instead_of_crashing(tmp_path):
+    save_credentials(tmp_path, "some-key", True)
+    Path(os.environ["AUDIENCE_CREDENTIALS_KEY_FILE"]).unlink()
+    assert read_credentials(tmp_path)["api_key"] == ""
+
+
+def test_overloaded_model_fails_fast_with_a_clear_error_not_a_hang():
+    def handler(request):
+        raise httpx.ReadTimeout("timed out")
+
+    client = GeminiClient(
+        "test-secret-key", "gemini-3.8-flash", free_tier_confirmed=True, transport=httpx.MockTransport(handler)
+    )
+    client.retry_delays = ()
+    with pytest.raises(CloudRuntimeError, match="sovraccarico"):
+        client.generate("sistema", "utente", {"type": "object"})
+
+
+def test_thinking_level_minimal_only_for_flash_lite():
+    assert GeminiClient("k", "gemini-3.5-flash-lite")._thinking_level() == "minimal"
+    assert GeminiClient("k", "gemini-3.8-flash")._thinking_level() == "low"
