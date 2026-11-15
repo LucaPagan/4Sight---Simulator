@@ -566,6 +566,10 @@ class PersonaWriter:
 
     def compatible(self, card, profile, accepted=()):
         try:
+            if card.get("source") not in {"llm", "template"} or card.get("facts") != describe_profile(
+                profile
+            ):
+                return False
             if card.get("source") == "template":
                 expected = template_card(profile, 0)
                 return card.get("writer_key") == self.key(profile) and all(
@@ -709,6 +713,7 @@ class PersonaWriter:
                                 accepted.append(stored)
                                 self._remember(used, stored)
                                 written_count += 1
+                                stats["accepted"] += 1
                     except (CloudRuntimeError, httpx.ConnectError):
                         stats["errors"] += 1
                         # Availability failures do not exhaust a person's validation/repair budget.

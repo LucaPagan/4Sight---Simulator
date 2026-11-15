@@ -464,14 +464,19 @@ class SimulationService:
             import statistics
 
             card_rates = [
-                r["performance"]["cards"]["seconds"] / r["performance"]["cards"]["attempts"]
+                r["performance"]["cards"]["seconds"]
+                / (
+                    r["performance"]["cards"].get("accepted", 0)
+                    + r["performance"]["cards"].get("fallback", 0)
+                )
                 for r in timings
-                if r["performance"].get("cards", {}).get("attempts", 0)
+                if r["performance"].get("cards", {}).get("accepted", 0)
+                + r["performance"].get("cards", {}).get("fallback", 0)
             ]
             reaction_rates = [
-                r["performance"]["reactions"]["seconds"] / r["performance"]["reactions"]["attempts"]
+                r["performance"]["reactions"]["seconds"] / r["performance"]["reactions"]["accepted"]
                 for r in timings
-                if r["performance"].get("reactions", {}).get("attempts", 0)
+                if r["performance"].get("reactions", {}).get("accepted", 0)
             ]
             if (not cards_missing or len(card_rates) >= 3) and (not new or len(reaction_rates) >= 3):
                 estimate = (statistics.median(card_rates) * cards_missing if cards_missing else 0) + (

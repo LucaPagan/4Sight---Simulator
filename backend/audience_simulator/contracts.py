@@ -47,6 +47,7 @@ class Prediction(ResponseModel):
 
 class StagePerformance(ResponseModel):
     calls: int = Field(default=0, ge=0)
+    accepted: int = Field(default=0, ge=0)
     attempts: int = Field(default=0, ge=0)
     rejected: int = Field(default=0, ge=0)
     corrections: int = Field(default=0, ge=0)

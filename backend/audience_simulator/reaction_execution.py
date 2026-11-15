@@ -92,6 +92,7 @@ def run_reaction_plan(
                 if exc is None:
                     repo.save_decision(item["key"], {"digest": digest, "result": record})
                     decisions[item["key"]] = record
+                    metrics["accepted"] += 1
                 else:
                     metrics["errors"] += 1
                     if isinstance(exc, (CloudRuntimeError, httpx.ConnectError)):
@@ -105,7 +106,7 @@ def run_reaction_plan(
                             failed.append(item["key"])
                             if stop_on_invalid:
                                 error = error or ValueError(
-                                    f"Reazione {item['agent_id']}/{item['creative_id']}: {type(exc).__name__}"
+                                    f"Reazione {item['agent_id']}/{item['creative_id']}: {type(exc).__name__}: {str(exc)[:240]}"
                                 )
                                 stopped = True
                 notify()

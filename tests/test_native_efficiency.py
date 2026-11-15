@@ -240,3 +240,52 @@ def test_full_120_person_native_run_resumes_only_missing_reactions(tmp_path):
     assert final["performance"]["reactions"]["calls"] == 720
     assert final["performance"]["reactions"]["cache_hits"] == 5
     assert len(svc.result(run["id"])["profiles"]) == 120
+
+
+def test_cache_compatibility_requires_complete_stored_metadata(tmp_path):
+    repo = Repository(f"sqlite:///{tmp_path}/cards.db")
+    profile = targeted()[0]
+    w = writer(repo, FakeWriter())
+    cards, _ = w.write([profile])
+    card = cards[profile["agent_id"]]
+    for field in ("facts", "source"):
+        broken = {k: v for k, v in card.items() if k != field}
+        assert not w.compatible(broken, profile)
+    assert not w.compatible({**card, "facts": ["fatti diversi"]}, profile)
+
+
+def test_native_estimate_includes_failed_attempts_per_valid_result(tmp_path):
+    from pathlib import Path
+
+    from audience_simulator.config import Settings
+    from audience_simulator.persona_cards import PERSONA_PROMPT_VERSION
+    from audience_simulator.reactions import REACTION_PROMPT_VERSION
+    from audience_simulator.service import SimulationService
+    from test_native_engine import PAYLOAD, FakeAgent
+
+    svc = SimulationService(
+        Settings(
+            database_url=f"sqlite:///{tmp_path}/db",
+            artifact_dir=tmp_path / "art",
+            data_dir=Path("data"),
+            queue_mode="manual",
+        )
+    )
+    scenario = svc.create_scenario(PAYLOAD)
+    for n in range(3):
+        run = svc.repo.create_run(scenario["id"], f"historical-{n}")
+        svc.repo.update_run(
+            run["id"],
+            mode="agent_native",
+            model_digest="fake-digest",
+            completion_status="complete",
+            performance={
+                "writer_version": PERSONA_PROMPT_VERSION,
+                "reaction_prompt_version": REACTION_PROMPT_VERSION,
+                "concurrency": 1,
+                "cards": {"attempts": 90, "accepted": 30, "fallback": 0, "seconds": 900},
+                "reactions": {"attempts": 180, "accepted": 60, "seconds": 1800},
+            },
+        )
+    preflight = svc.native_preflight(scenario["id"], FakeAgent(), "fake", ("first",))
+    assert preflight["estimated_seconds"] == 2700  # 30 new cards + 60 new reactions, retries included

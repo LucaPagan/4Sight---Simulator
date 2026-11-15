@@ -2518,6 +2518,12 @@
             "title": "Calls",
             "default": 0
           },
+          "accepted": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Accepted",
+            "default": 0
+          },
           "attempts": {
             "type": "integer",
             "minimum": 0.0,

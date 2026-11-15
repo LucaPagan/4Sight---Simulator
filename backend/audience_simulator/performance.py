@@ -6,6 +6,7 @@ def stage_metrics(previous=None):
         **dict.fromkeys(
             (
                 "calls",
+                "accepted",
                 "attempts",
                 "rejected",
                 "corrections",
