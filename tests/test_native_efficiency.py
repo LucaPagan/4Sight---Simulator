@@ -310,3 +310,45 @@ def test_performance_checkpoint_cannot_undo_concurrent_cancel(tmp_path, monkeypa
     monkeypatch.setattr(repo, "get", cancel_after_read)
     repo.update_run(run["id"], performance={"cards": {"calls": 1}})
     assert original("simulation_runs", run["id"])["status"] == "canceled"
+
+
+def test_immediate_cancel_and_resume_stops_old_writer_before_next_batch(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from audience_simulator.api import create_app
+    from audience_simulator.config import Settings
+    from audience_simulator.service import SimulationService
+    from fastapi.testclient import TestClient
+    from test_native_engine import PAYLOAD, FakeAgent
+
+    svc = SimulationService(
+        Settings(
+            database_url=f"sqlite:///{tmp_path}/db",
+            artifact_dir=tmp_path / "art",
+            data_dir=Path("data"),
+            queue_mode="manual",
+            monte_carlo_draws=20,
+        )
+    )
+    scenario = svc.create_scenario(PAYLOAD)
+    run = svc.repo.create_run(
+        scenario["id"], "rapid-resume", {"provider": "fake", "mode": "agent_native", "slots": ["first"]}
+    )
+    api = TestClient(create_app(svc))
+
+    class CancelResume(FakeAgent):
+        def generate(self, *args, **kwargs):
+            result = super().generate(*args, **kwargs)
+            if len(self.writer.calls) == 1:
+                assert api.post(f"/api/v1/simulations/{run['id']}/cancel").status_code == 200
+                assert api.post(f"/api/v1/simulations/{run['id']}/resume").status_code == 202
+            return result
+
+    client = CancelResume()
+    monkeypatch.setattr(svc, "client", lambda *args, **kwargs: client)
+    svc.execute_run(run["id"], client=client)
+    assert len(client.writer.calls) == 1 and client.reactions == 0
+    assert svc.repo.get("simulation_runs", run["id"])["status"] == "queued"
+    fresh = FakeAgent()
+    svc.execute_run(run["id"], client=fresh)
+    assert svc.repo.get("simulation_runs", run["id"])["completion_status"] == "complete"

@@ -314,7 +314,7 @@ def create_app(service=None):
         run = svc.repo.get("simulation_runs", run_id)
         if run["completion_status"] == "complete":
             return run
-        return svc.repo.update_run(run_id, status="canceled", phase="canceled")
+        return svc.repo.update_run(run_id, status="canceled", phase="canceled", cancellation_id=str(uuid4()))
 
     @app.post("/api/v1/simulations/{run_id}/resume", status_code=202)
     def resume(run_id: str):

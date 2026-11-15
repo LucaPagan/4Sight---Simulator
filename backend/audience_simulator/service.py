@@ -988,6 +988,12 @@ class SimulationService:
         profiles = population["profiles"]
         slots = tuple(run.get("slots") or SLOTS)
 
+        def interrupted():
+            current = self.repo.get("simulation_runs", run_id)
+            return current["status"] == "canceled" or current.get("cancellation_id") != run.get(
+                "cancellation_id"
+            )
+
         def pause(status, error, **extra):
             self.repo.update_run(run_id, status=status, error=error, **extra)
 
@@ -1043,7 +1049,7 @@ class SimulationService:
             def card_progress(done, total):
                 performance["cards"] = dict(writer.performance)
                 self.repo.replace("populations", population["id"], {**population, "writer_state": state})
-                if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
+                if interrupted():
                     self.repo.update_run(run_id, performance=performance)
                     raise InterruptedError("Simulazione annullata")
                 self.repo.update_run(
@@ -1086,7 +1092,7 @@ class SimulationService:
 
             def reaction_progress(completed, metrics):
                 performance["reactions"] = dict(metrics)
-                if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
+                if interrupted():
                     self.repo.update_run(run_id, performance=performance)
                 else:
                     self.repo.update_run(
@@ -1105,7 +1111,7 @@ class SimulationService:
                 max_evaluations=self.cfg.max_evaluations,
                 performance=performance["reactions"],
                 progress=reaction_progress,
-                canceled=lambda: self.repo.get("simulation_runs", run_id)["status"] == "canceled",
+                canceled=interrupted,
             )
             decisions = execution["decisions"]
             if execution["canceled"]:
@@ -1196,7 +1202,7 @@ class SimulationService:
             }
             self._publish(run_id, result, predictions, behavior, report)
         except Exception as exc:
-            if self.repo.get("simulation_runs", run_id)["status"] == "canceled":
+            if interrupted():
                 return
             self.repo.update_run(
                 run_id, status="failed", phase="error", error=f"{type(exc).__name__}: {str(exc)[:300]}"

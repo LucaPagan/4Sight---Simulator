@@ -6,10 +6,10 @@ local reaction concurrency (default 1; cloud remains sequential).
 
 ## Regression verification
 
-- Backend: 330 tests passed, including a full 120-person / 720-reaction native simulation paused after
+- Backend: 331 tests passed, including a full 120-person / 720-reaction native simulation paused after
   five reactions and resumed with exactly the 715 missing calls.
 - Cancellation: the original code continued all four persona batches after cancellation; the new code
-  stops after the current batch and preserves valid cards. Concurrent metrics checkpoints cannot undo cancellation.
+  stops after the current batch and preserves valid cards. Concurrent metrics checkpoints cannot undo cancellation. An immediate cancel/resume sequence retains a cancellation identifier so the old execution stops even after the status returns to queued.
 - Frontend: typecheck, production build (webpack), six unit tests and 12 browser journeys passed.
 - Independent review: retry costs were missing from ETA denominators; fixed with RED/GREEN regression tests.
   Incomplete cached metadata is also rejected before constructing reactions.
