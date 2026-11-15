@@ -141,7 +141,9 @@ def population(tmp_path):
         "targeting": {"audience_intent": "ha un cane", "detailed": [{"id": "interest:dogs"}]},
     }
     scenario = service.create_scenario(payload)
-    service.write_personas(scenario["id"], client=FakeWriter())
+    card_writer = FakeWriter()
+    card_writer.model = FakeReactor.model
+    service.write_personas(scenario["id"], client=card_writer)
     return service, scenario["id"]
 
 

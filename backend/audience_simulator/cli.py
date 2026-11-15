@@ -24,6 +24,11 @@ def main():
     benchmark.add_argument("--model", default="qwen3.5:9b")
     benchmark.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
     benchmark.add_argument("--cases", type=int, default=96)
+    native = commands.add_parser("benchmark-native", help="Benchmark isolato di schede e reazioni")
+    native.add_argument("--scenario-id", required=True)
+    native.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
+    native.add_argument("--model", default=None)
+    native.add_argument("--concurrency", type=int, choices=[1, 2, 3, 4], default=1)
     simulate = commands.add_parser("simulate")
     simulate.add_argument("brief", type=Path)
     simulate.add_argument("--provider", choices=["ollama", "gemini", "cloudflare"], default="ollama")
@@ -82,6 +87,11 @@ def main():
     from .service import SimulationService
 
     service = SimulationService(settings())
+    if args.command == "benchmark-native":
+        from .native_benchmark import benchmark_native
+        result = benchmark_native(service, args.scenario_id, args.provider, args.model, args.concurrency)
+        print(json.dumps({k: v for k, v in result.items() if k not in {"decisions", "writer_state"}}, ensure_ascii=False, indent=2))
+        return
     if args.command == "panel":
         from .corpus import ComparableCampaign, sample_ids
         from .panel_corpus import run_panel

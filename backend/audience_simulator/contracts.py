@@ -1,6 +1,6 @@
 """Response contracts; form drafts may be incomplete, published results may not."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResponseModel(BaseModel):
@@ -45,6 +45,29 @@ class Prediction(ResponseModel):
     confidence_status: str
 
 
+class StagePerformance(ResponseModel):
+    calls: int = Field(default=0, ge=0)
+    accepted: int = Field(default=0, ge=0)
+    attempts: int = Field(default=0, ge=0)
+    rejected: int = Field(default=0, ge=0)
+    corrections: int = Field(default=0, ge=0)
+    errors: int = Field(default=0, ge=0)
+    cache_hits: int = Field(default=0, ge=0)
+    fallback: int = Field(default=0, ge=0)
+    tokens: int = Field(default=0, ge=0)
+    prompt_tokens: int = Field(default=0, ge=0)
+    seconds: float = Field(default=0, ge=0)
+    pacing_seconds: float = Field(default=0, ge=0)
+
+
+class NativePerformance(ResponseModel):
+    cards: StagePerformance = Field(default_factory=StagePerformance)
+    reactions: StagePerformance = Field(default_factory=StagePerformance)
+    writer_version: str | None = None
+    reaction_prompt_version: str | None = None
+    concurrency: int = Field(default=1, ge=1, le=4)
+
+
 class SimulationRun(ResponseModel):
     id: str
     scenario_id: str
@@ -61,6 +84,7 @@ class SimulationRun(ResponseModel):
     heartbeat_at: str | None = None
     provider: str = "ollama"
     requested_model: str | None = None
+    performance: NativePerformance | None = None
 
 
 class SimulationResult(ResponseModel):

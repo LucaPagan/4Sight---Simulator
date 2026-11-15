@@ -18,9 +18,10 @@ from pydantic import ValidationError
 from .agents import policy_key
 from .audience import stable_seed
 from .cloud import CloudRuntimeError
+from .performance import add_usage, stage_metrics
 from .schemas import PersonaCard
 
-PERSONA_PROMPT_VERSION = "persona-writer-v2"
+PERSONA_PROMPT_VERSION = "persona-writer-v3"
 BATCH_SIZE = 8
 MAX_ATTEMPTS = 3
 USED_LIMIT = 60
@@ -37,7 +38,7 @@ SYSTEM_PROMPT = """Scrivi le schede di persone reali e ordinarie che vivono in {
 Non cambiare nessun fatto (età, genere, nucleo, figli, animale, lavoro, zona, dispositivo, piattaforme). Non dire l'età in cifre dentro i testi.
 Aggiungi dettagli concreti e verosimili, mai da caricatura: nome e cognome comuni per età e luogo, città coerente con la zona, mestiere o occupazione concreti,
 routine tipo, cosa compra davvero nella categoria, cosa guarda su Instagram o Facebook, come reagisce di solito alle pubblicità (cosa lo fa fermare,
-cosa lo infastidisce), un paio di abitudini o contraddizioni normali. Scrivi in terza persona, in italiano semplice.
+cosa lo infastidisce), un paio di abitudini o contraddizioni normali. Scrivi in terza persona, in italiano semplice. Usa una o due frasi brevi per campo, senza ripetere gli stessi fatti.
 Non inventare salute, religione, politica, orientamento, origine etnica, né marchi o negozi reali, né prezzi o importi nei testi.
 Le persone di una stessa richiesta devono essere molto diverse tra loro: nomi, mestieri e aperture delle schede non si ripetono, e non riutilizzare quelli già usati.
 budget_eur_month è quanto spende al mese solo per i prodotti di questa categoria: di solito poche decine di euro, mai più di qualche centinaio.
@@ -471,6 +472,17 @@ def user_prompt(profiles, vertical, used, corrections=None):
     lines.append("Persone da scrivere:")
     for index, profile in enumerate(profiles, 1):
         lines.append(f"P{index}\n" + "\n".join(f"- {fact}" for fact in describe_profile(profile)))
+        lines.append(
+            f"- budget_eur_month: intero tra 0 e {BUDGET_CAP[profile['income_band']]}, solo per questa categoria."
+        )
+        occupation = {
+            "student": "job deve indicare studente; bio coerente con lo studio",
+            "retired": "job deve indicare pensionato, eventualmente con il mestiere precedente",
+            "employed": "job deve indicare un mestiere da dipendente, non studente o pensionato",
+            "self_employed": "job deve indicare un mestiere autonomo, non studente o pensionato",
+            "not_working": "job deve indicare che attualmente non lavora",
+        }[profile["occupation"]]
+        lines.append("- Occupazione: " + occupation + ".")
         previous = (corrections or {}).get(profile["agent_id"]) or ([], {})
         hints = hints_for(*previous)
         if hints:
@@ -479,6 +491,8 @@ def user_prompt(profiles, vertical, used, corrections=None):
 
 
 class PersonaWriter:
+    version = PERSONA_PROMPT_VERSION
+
     def __init__(self, repo, client, digest, vertical, country="IT", brand="", batch_size=None):
         self.repo, self.client, self.digest = repo, client, digest or "unknown-runtime"
         self.vertical, self.country, self.brand = vertical, country, brand
@@ -486,6 +500,7 @@ class PersonaWriter:
         self.system = SYSTEM_PROMPT.format(country=COUNTRY_NAMES.get(country, country))
         self.rejected_samples = []  # the rejected texts, kept for diagnosis only (never stored with the run)
         self.timings = []
+        self.performance = stage_metrics()
 
     def key(self, profile):
         return policy_key(
@@ -494,6 +509,7 @@ class PersonaWriter:
                 "skeleton": skeleton_view(profile),
                 "vertical": self.vertical,
                 "country": self.country,
+                "brand": self.brand,
                 "writer": PERSONA_PROMPT_VERSION,
                 "system": self.system,
                 "provider": self.client.provider,
@@ -507,7 +523,7 @@ class PersonaWriter:
         seed = stable_seed(
             self.vertical, self.country, PERSONA_PROMPT_VERSION, attempt, *(p["agent_id"] for p in group)
         )
-        result = self.client.generate(
+        result = self._generate(
             self.system,
             user_prompt(group, self.vertical, used, corrections),
             schema,
@@ -532,109 +548,215 @@ class PersonaWriter:
                 cards[card.ref] = card
         return cards, result
 
-    def write(self, profiles, progress=None):
-        """``progress(done, total)`` is called after every batch. Cards for every profile: ``{agent_id: card_dict}`` plus a report. Quota errors propagate; cache keeps progress."""
+    def _generate(self, *args, **kwargs):
+        start = time.monotonic()
+        self.performance["calls"] += 1
+        try:
+            result = self.client.generate(*args, **kwargs)
+            add_usage(self.performance, result)
+            self.timings.append(
+                {
+                    k: result.get(k)
+                    for k in ("seconds", "prompt_tokens", "tokens", "prompt_seconds", "output_seconds")
+                }
+            )
+            return result
+        finally:
+            self.performance["seconds"] += time.monotonic() - start
+
+    def compatible(self, card, profile, accepted=()):
+        try:
+            if card.get("source") not in {"llm", "template"} or card.get("facts") != describe_profile(
+                profile
+            ):
+                return False
+            if card.get("source") == "template":
+                expected = template_card(profile, 0)
+                return card.get("writer_key") == self.key(profile) and all(
+                    card.get(k) == value for k, value in expected.items() if k not in {"name", "ref"}
+                )
+            parsed = PersonaCard.model_validate({k: card[k] for k in PersonaCard.model_fields})
+            return (
+                card.get("writer_key") == self.key(profile)
+                and not validate_card(parsed, profile, [self.brand], self.vertical)
+                and (card.get("source") == "template" or not duplicate_problem(parsed, accepted))
+            )
+        except (ValueError, KeyError, TypeError):
+            return False
+
+    def _repair(self, profile, previous, problems, attempt):
+        fields = ["budget_eur_month"] if problems == ["budget_incoerente"] else ["job", "bio"]
+        properties = PersonaCard.model_json_schema()["properties"]
+        schema = {
+            "type": "object",
+            "properties": {k: properties[k] for k in fields},
+            "required": fields,
+            "additionalProperties": False,
+        }
+        if fields == ["budget_eur_month"]:
+            schema["properties"]["budget_eur_month"]["maximum"] = BUDGET_CAP[profile["income_band"]]
+        result = self._generate(
+            self.system,
+            user_prompt([profile], self.vertical, {"names": [], "jobs": [], "openings": []})
+            + "\nCorreggi solo i campi richiesti dello schema. Scheda precedente:\n"
+            + json.dumps(previous, ensure_ascii=False),
+            schema,
+            temperature=0.9,
+            seed=stable_seed(profile["agent_id"], PERSONA_PROMPT_VERSION, attempt) % 2**31,
+            max_tokens=900,
+        )
+        patch = json.loads(strip_fences(result["raw"]))
+        if not isinstance(patch, dict) or set(patch) != set(fields):
+            raise ValueError("Campi della correzione non validi")
+        return PersonaCard.model_validate({**previous, **patch}), result
+
+    def write(self, profiles, progress=None, *, performance=None, state=None):
+        """Write missing cards. ``state`` and performance can be checkpointed by ``progress(done, total)``."""
         if any("household" not in p for p in profiles):
             raise ValueError(
                 "Le schede richiedono un pannello mirato (targeting): profili senza attributi di vita"
             )
         start = time.monotonic()
-        stats = {"calls": 0, "tokens": 0, "prompt_tokens": 0, "attempts": 0, "written": 0}
+        self.performance = stage_metrics(performance)
+        stats = self.performance
+        state = {} if state is None else state
         rejected, omitted = Counter(), Counter()
-        cards, pending = {}, []
+        cards, pending, accepted = {}, [], []
+        written_count = 0
         for profile in profiles:
             key = self.key(profile)
             stored = self.repo.get_card(key)
-            if stored:
-                cards[profile["agent_id"]] = stored["card"]
+            if stored and self.compatible(stored["card"], profile, accepted):
+                card = stored["card"]
+                cards[profile["agent_id"]] = card
+                if card["source"] == "llm":
+                    accepted.append(card)
             else:
                 pending.append((profile, key))
         cached = len(cards)
+        stats["cache_hits"] += cached
         used = {"names": [], "jobs": [], "openings": []}
-        accepted = [c for c in cards.values() if c["source"] == "llm"]
         for card in accepted:
             self._remember(used, card)
-        corrections = {}
-        for attempt in range(MAX_ATTEMPTS):
-            if not pending:
+
+        def notify():
+            if progress:
+                progress(len(cards), len(profiles))
+
+        notify()
+        while pending:
+            eligible = [(p, k) for p, k in pending if state.get(k, {}).get("attempts", 0) < MAX_ATTEMPTS]
+            if not eligible:
                 break
             failed = []
-            for offset in range(0, len(pending), self.batch_size):
-                group = pending[offset : offset + self.batch_size]
-                profiles_group = [p for p, _ in group]
-                try:
-                    written, result = self._call(profiles_group, used, attempt, corrections)
-                except (CloudRuntimeError, httpx.ConnectError):
-                    # Quota, auth and provider failures stop the run: writing template cards would hide them.
-                    raise
-                except (ValueError, KeyError, ValidationError, json.JSONDecodeError, httpx.HTTPError) as exc:
-                    # A timeout or a malformed answer costs one attempt for these people; it never fails the run.
-                    rejected[f"risposta_non_valida:{type(exc).__name__}"] += len(group)
-                    failed.extend(group)
-                    continue
-                stats["calls"] += 1
-                self.timings.append(
-                    {
-                        k: result.get(k)
-                        for k in ("seconds", "prompt_tokens", "tokens", "prompt_seconds", "output_seconds")
-                    }
+            for offset in range(0, len(eligible), self.batch_size):
+                group = eligible[offset : offset + self.batch_size]
+                # A repair uses one card's schema; full generations retain the existing small batches.
+                groups = (
+                    [[item] for item in group]
+                    if any(state.get(k, {}).get("repair") for _, k in group)
+                    else [group]
                 )
-                stats["tokens"] += result.get("tokens", 0)
-                stats["prompt_tokens"] += result.get("prompt_tokens", 0)
-                for index, (profile, key) in enumerate(group, 1):
-                    stats["attempts"] += 1
-                    card = written.get(f"P{index}")
-                    details = {}
-                    problems = (
-                        ["scheda_mancante"]
-                        if card is None
-                        else validate_card(card, profile, [self.brand], self.vertical, details)
-                    )
-                    if card is not None and not problems:
-                        duplicate = duplicate_problem(card, accepted)
-                        problems = [duplicate] if duplicate else []
-                    if problems:
-                        if len(self.rejected_samples) < SAMPLE_LIMIT:
-                            self.rejected_samples.append(
-                                {
-                                    "agent_id": profile["agent_id"],
-                                    "attempt": attempt,
-                                    "problems": problems,
-                                    "card": card.model_dump() if card else None,
-                                }
+                for batch in groups:
+                    previous = state.get(batch[0][1], {})
+                    repair = len(batch) == 1 and previous.get("repair")
+                    attempt = max(state.get(k, {}).get("attempts", 0) for _, k in batch)
+                    for _, key in batch:
+                        state.setdefault(key, {})["attempts"] = state.get(key, {}).get("attempts", 0) + 1
+                    stats["attempts"] += len(batch)
+                    if repair:
+                        stats["corrections"] += 1
+                    try:
+                        if repair:
+                            card, result = self._repair(
+                                batch[0][0], previous["card"], previous["problems"], attempt
                             )
-                        rejected.update(problems)
-                        corrections[profile["agent_id"]] = (problems, details)
-                        failed.append((profile, key))
-                        continue
-                    omitted.update(card_omissions(card, profile, self.vertical))
-                    stored = self._store(key, profile, card.model_dump(), "llm", result, attempt)
-                    stats["written"] += 1
-                    cards[profile["agent_id"]] = stored
-                    accepted.append(stored)
-                    self._remember(used, stored)
-                if progress:
-                    progress(len(cards), len(profiles))
-            pending = failed
+                            generated = {"P1": card}
+                        else:
+                            corrections = {
+                                p["agent_id"]: (state.get(k, {}).get("problems", []), {}) for p, k in batch
+                            }
+                            generated, result = self._call([p for p, _ in batch], used, attempt, corrections)
+                        for index, (profile, key) in enumerate(batch, 1):
+                            card = generated.get(f"P{index}")
+                            problems = (
+                                ["scheda_mancante"]
+                                if card is None
+                                else validate_card(card, profile, [self.brand], self.vertical)
+                            )
+                            duplicate = duplicate_problem(card, accepted) if card is not None else None
+                            if duplicate:
+                                problems = sorted(set(problems + [duplicate]))
+                            if problems:
+                                stats["rejected"] += 1
+                                rejected.update(problems)
+                                partial = problems in (["budget_incoerente"], ["occupazione_incoerente"])
+                                state[key].update(
+                                    card=card.model_dump() if card else None,
+                                    problems=problems,
+                                    repair=partial,
+                                )
+                                if len(self.rejected_samples) < SAMPLE_LIMIT:
+                                    self.rejected_samples.append(
+                                        {
+                                            "agent_id": profile["agent_id"],
+                                            "attempt": attempt,
+                                            "problems": problems,
+                                            "card": card.model_dump() if card else None,
+                                        }
+                                    )
+                                failed.append((profile, key))
+                            else:
+                                omitted.update(card_omissions(card, profile, self.vertical))
+                                stored = self._store(key, profile, card.model_dump(), "llm", result, attempt)
+                                cards[profile["agent_id"]] = stored
+                                accepted.append(stored)
+                                self._remember(used, stored)
+                                written_count += 1
+                                stats["accepted"] += 1
+                    except (CloudRuntimeError, httpx.ConnectError):
+                        stats["errors"] += 1
+                        # Availability failures do not exhaust a person's validation/repair budget.
+                        for _, key in batch:
+                            state[key]["attempts"] -= 1
+                        raise
+                    except (ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
+                        stats["errors"] += 1
+                        stats["rejected"] += len(batch)
+                        rejected[f"risposta_non_valida:{type(exc).__name__}"] += len(batch)
+                        for _, key in batch:
+                            state[key]["repair"] = False
+                        failed.extend(batch)
+                    finally:
+                        notify()
+            exhausted = [
+                (p, k)
+                for p, k in pending
+                if state.get(k, {}).get("attempts", 0) >= MAX_ATTEMPTS and p["agent_id"] not in cards
+            ]
+            pending = list({k: (p, k) for p, k in failed + exhausted}.values())
         for ordinal, (profile, key) in enumerate(pending, 1):
             cards[profile["agent_id"]] = self._store(
                 key, profile, template_card(profile, ordinal), "template", None, MAX_ATTEMPTS
             )
+            stats["fallback"] += 1
+        notify()
         sources = Counter(c["source"] for c in cards.values())
         report = {
+            **stats,
             "writer_version": PERSONA_PROMPT_VERSION,
             "provider": self.client.provider,
             "model": self.client.model,
             "personas": len(profiles),
             "from_cache": cached,
-            "written_by_llm": stats["written"],
+            "written_by_llm": written_count,
+            "written": written_count,
             "template_fallback": sources["template"],
             "rejected_reasons": dict(rejected),
             "accepted_with_omissions": dict(omitted),
-            "seconds": round(time.monotonic() - start, 2),
-            **stats,
+            "wall_seconds": round(time.monotonic() - start, 2),
             "evidence": "hypothesis",
-            "diversity": card_diversity([cards[p["agent_id"]] for p in profiles]),
+            "diversity": card_diversity(list(cards.values())),
         }
         return {p["agent_id"]: cards[p["agent_id"]] for p in profiles}, report
 
@@ -650,6 +772,10 @@ class PersonaWriter:
             "source": source,
             "facts": describe_profile(profile),
             "writer_version": PERSONA_PROMPT_VERSION,
+            "writer_key": key,
+            "provider": self.client.provider,
+            "model": self.client.model,
+            "digest": self.digest,
             "attempt": attempt,
         }
         self.repo.save_card(

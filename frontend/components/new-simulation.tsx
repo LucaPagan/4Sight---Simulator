@@ -189,7 +189,7 @@ export function NewSimulation() {
           {native ? (
             <>
               <p><b className="num">{fmt(brief.population_size * brief.creatives.length * slots.length)}</b> reazioni, almeno</p>
-              <p className="hint">Più le schede di {fmt(brief.population_size)} persone. {runtimeChoice.provider === "ollama" ? "Con il modello locale ogni scheda e ogni reazione richiedono decine di secondi: per una prima prova scegli 60 persone e togli le ripetizioni." : "Con un modello online può servire più di un'ora."} Si riprende da dove si ferma.</p>
+              <p className="hint">Più le schede di {fmt(brief.population_size)} persone. Il tempo dipende dal modello, dai tentativi e dai risultati già disponibili. Si riprende da dove si ferma.</p>
               <p className="warn">{NATIVE_WARNING}</p>
             </>
           ) : <p><b className="num">{fmt(brief.population_size * brief.creatives.length)}</b> valutazioni</p>}
